@@ -35,6 +35,13 @@ class SupabaseService:
     # Conversations
     # ============================================
     
+    def _normalize_phone(self, phone: str) -> str:
+        """ت normalize رقم الهاتف"""
+        if not phone:
+            return phone
+        # إزالة المسافات و +
+        return phone.replace(" ", "").replace("+", "")
+    
     async def create_conversation(
         self,
         customer_phone: str,
@@ -45,9 +52,13 @@ class SupabaseService:
             print("⚠️ [Supabase] MOCK: Creating mock conversation")
             return {"success": True, "conversation_id": f"mock-{datetime.utcnow().timestamp()}"}
         
+        # Normalize phone number
+        normalized_phone = self._normalize_phone(customer_phone)
+        print(f"📱 [Supabase] Normalized phone: {normalized_phone}")
+        
         try:
             result = self.client.table("conversations").insert({
-                "phone": customer_phone,
+                "phone": normalized_phone,
                 "type": "customer",  # Required field
                 "status": "new",
                 "metadata": {
@@ -83,8 +94,10 @@ class SupabaseService:
         if not self.client:
             return None
         
+        normalized_phone = self._normalize_phone(customer_phone)
+        
         try:
-            result = self.client.table("conversations").select("*").eq("phone", customer_phone).order("created_at", desc=True).limit(1).execute()
+            result = self.client.table("conversations").select("*").eq("phone", normalized_phone).order("created_at", desc=True).limit(1).execute()
             return result.data[0] if result.data else None
         except Exception as e:
             print(f"❌ [Supabase] Get conversation by phone error: {e}")
@@ -96,9 +109,12 @@ class SupabaseService:
             print(f"⚠️ [Supabase] MOCK: No active conversation for {customer_phone}")
             return None
         
+        normalized_phone = self._normalize_phone(customer_phone)
+        print(f"🔍 [Supabase] Searching for phone: {normalized_phone}")
+        
         try:
             # جلب آخر محادثة غير مكتملة
-            result = self.client.table("conversations").select("*").eq("phone", customer_phone).neq("status", "completed").order("created_at", desc=True).limit(1).execute()
+            result = self.client.table("conversations").select("*").eq("phone", normalized_phone).neq("status", "completed").order("created_at", desc=True).limit(1).execute()
             
             if result.data:
                 conv = result.data[0]
@@ -117,7 +133,7 @@ class SupabaseService:
                 
                 return conv
             
-            print(f"ℹ️ [Supabase] No active conversation found for {customer_phone}")
+            print(f"ℹ️ [Supabase] No active conversation found for {normalized_phone}")
             return None
         except Exception as e:
             print(f"❌ [Supabase] Get active conversation error: {e}")
