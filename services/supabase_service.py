@@ -47,12 +47,14 @@ class SupabaseService:
         
         try:
             result = self.client.table("conversations").insert({
-                "customer_phone": customer_phone,
+                "phone": customer_phone,  # Changed from customer_phone
                 "status": "new",
-                "context": {
+                "metadata": {  # Changed from context
                     "initial_message": initial_message,
                     "extracted_data": {}
                 },
+                "last_message": initial_message,
+                "last_message_at": datetime.utcnow().isoformat(),
                 "created_at": datetime.utcnow().isoformat()
             }).execute()
             
@@ -81,7 +83,7 @@ class SupabaseService:
             return None
         
         try:
-            result = self.client.table("conversations").select("*").eq("customer_phone", customer_phone).order("created_at", desc=True).limit(1).execute()
+            result = self.client.table("conversations").select("*").eq("phone", customer_phone).order("created_at", desc=True).limit(1).execute()
             return result.data[0] if result.data else None
         except Exception as e:
             print(f"❌ [Supabase] Get conversation by phone error: {e}")
@@ -95,11 +97,16 @@ class SupabaseService:
         
         try:
             # جلب آخر محادثة غير مكتملة
-            result = self.client.table("conversations").select("*").eq("customer_phone", customer_phone).neq("status", "completed").order("created_at", desc=True).limit(1).execute()
+            result = self.client.table("conversations").select("*").eq("phone", customer_phone).neq("status", "completed").order("created_at", desc=True).limit(1).execute()
             
             if result.data:
                 conv = result.data[0]
                 print(f"✅ [Supabase] Found active conversation: {conv['id']}")
+                
+                # تحويل metadata إلى context للتوافق مع الكود
+                if "metadata" in conv and conv["metadata"]:
+                    conv["context"] = conv["metadata"]
+                
                 print(f"📋 [Supabase] Status: {conv.get('status')}, Context: {conv.get('context')}")
                 
                 # إذا المحادثة في وضع انتظار أو عرض، تعتبر مكتملة
@@ -131,7 +138,7 @@ class SupabaseService:
             if status:
                 update_data["status"] = status
             if context:
-                update_data["context"] = context
+                update_data["metadata"] = context  # Use metadata instead of context
             
             print(f"📝 [Supabase] Updating {conversation_id}: {update_data}")
             
@@ -140,7 +147,7 @@ class SupabaseService:
             # تحقق من التحديث
             check = self.client.table("conversations").select("*").eq("id", conversation_id).execute()
             if check.data:
-                print(f"✅ [Supabase] Updated successfully: {check.data[0].get('context')}")
+                print(f"✅ [Supabase] Updated successfully")
             
             return True
         except Exception as e:
