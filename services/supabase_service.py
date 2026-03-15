@@ -47,9 +47,10 @@ class SupabaseService:
         
         try:
             result = self.client.table("conversations").insert({
-                "phone": customer_phone,  # Changed from customer_phone
+                "phone": customer_phone,
+                "type": "customer",  # Required field
                 "status": "new",
-                "metadata": {  # Changed from context
+                "metadata": {
                     "initial_message": initial_message,
                     "extracted_data": {}
                 },
