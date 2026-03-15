@@ -20,6 +20,13 @@ class SupabaseService:
         self.url = SUPABASE_URL
         self.key = SUPABASE_KEY
         
+        # Debug: print key type
+        if self.key:
+            key_type = "service_role" if self.key.startswith("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imx2Z25tbXFoZm9pbnN5Zm93a3d5Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSI") else "anon"
+            print(f"🔑 [Supabase] Using {key_type} key")
+        else:
+            print("⚠️ [Supabase] No key found")
+        
         if self.url and self.key:
             try:
                 self.client: Client = create_client(self.url, self.key)
