@@ -4,6 +4,7 @@ Supabase Database Service
 """
 
 import os
+import json
 from typing import Optional, Dict, Any, List
 from datetime import datetime, timedelta
 from supabase import create_client, Client
@@ -20,8 +21,12 @@ class SupabaseService:
         self.key = SUPABASE_KEY
         
         if self.url and self.key:
-            self.client: Client = create_client(self.url, self.key)
-            print("✅ [Supabase] Connected successfully")
+            try:
+                self.client: Client = create_client(self.url, self.key)
+                print(f"✅ [Supabase] Connected to: {self.url}")
+            except Exception as e:
+                self.client = None
+                print(f"❌ [Supabase] Connection failed: {e}")
         else:
             self.client = None
             print("⚠️ [Supabase] No credentials - Running in Mock Mode")
@@ -35,14 +40,10 @@ class SupabaseService:
         customer_phone: str,
         initial_message: str
     ) -> Dict[str, Any]:
-        """
-        إنشاء محادثة جديدة
-        
-        Returns:
-            {"success": bool, "conversation_id": str, "error": str}
-        """
+        """إنشاء محادثة جديدة"""
         if not self.client:
-            return {"success": True, "conversation_id": "mock-conv-123"}
+            print("⚠️ [Supabase] MOCK: Creating mock conversation")
+            return {"success": True, "conversation_id": f"mock-{datetime.utcnow().timestamp()}"}
         
         try:
             result = self.client.table("conversations").insert({
@@ -50,15 +51,14 @@ class SupabaseService:
                 "status": "new",
                 "context": {
                     "initial_message": initial_message,
-                    "stage": "collecting"
+                    "extracted_data": {}
                 },
                 "created_at": datetime.utcnow().isoformat()
             }).execute()
             
-            return {
-                "success": True,
-                "conversation_id": result.data[0]["id"]
-            }
+            conversation_id = result.data[0]["id"]
+            print(f"✅ [Supabase] Created conversation: {conversation_id}")
+            return {"success": True, "conversation_id": conversation_id}
         except Exception as e:
             print(f"❌ [Supabase] Create conversation error: {e}")
             return {"success": False, "error": str(e)}
@@ -66,7 +66,7 @@ class SupabaseService:
     async def get_conversation(self, conversation_id: str) -> Optional[Dict]:
         """الحصول على محادثة"""
         if not self.client:
-            return {"id": conversation_id, "status": "collecting", "context": {}}
+            return None
         
         try:
             result = self.client.table("conversations").select("*").eq("id", conversation_id).execute()
@@ -88,12 +88,9 @@ class SupabaseService:
             return None
     
     async def get_active_conversation_by_phone(self, customer_phone: str) -> Optional[Dict]:
-        """
-        الحصول على آخر محادثة نشطة للعميل (غير مكتملة)
-        
-        نشوف المحادثات اللي حالتها مو "completed" و "presenting"
-        """
+        """الحصول على آخر محادثة نشطة (غير مكتملة)"""
         if not self.client:
+            print(f"⚠️ [Supabase] MOCK: No active conversation for {customer_phone}")
             return None
         
         try:
@@ -102,15 +99,20 @@ class SupabaseService:
             
             if result.data:
                 conv = result.data[0]
-                # إذا المحادثة في وضع انتظار العروض أو تقديمها، نعتبرها مكتملة
-                if conv.get("status") in ["waiting", "presenting"]:
-                    print(f"ℹ️ [Supabase] Conversation {conv['id']} is in {conv['status']} state, treating as completed")
+                print(f"✅ [Supabase] Found active conversation: {conv['id']}")
+                print(f"📋 [Supabase] Status: {conv.get('status')}, Context: {conv.get('context')}")
+                
+                # إذا المحادثة في وضع انتظار أو عرض، تعتبر مكتملة
+                if conv.get("status") in ["waiting", "presenting", "searching"]:
+                    print(f"ℹ️ [Supabase] Conversation {conv['id']} is in {conv['status']} state")
                     return None
+                
                 return conv
             
+            print(f"ℹ️ [Supabase] No active conversation found for {customer_phone}")
             return None
         except Exception as e:
-            print(f"❌ [Supabase] Get active conversation by phone error: {e}")
+            print(f"❌ [Supabase] Get active conversation error: {e}")
             return None
     
     async def update_conversation(
@@ -121,6 +123,7 @@ class SupabaseService:
     ) -> bool:
         """تحديث المحادثة"""
         if not self.client:
+            print(f"⚠️ [Supabase] MOCK: Would update {conversation_id}")
             return True
         
         try:
@@ -130,7 +133,15 @@ class SupabaseService:
             if context:
                 update_data["context"] = context
             
+            print(f"📝 [Supabase] Updating {conversation_id}: {update_data}")
+            
             self.client.table("conversations").update(update_data).eq("id", conversation_id).execute()
+            
+            # تحقق من التحديث
+            check = self.client.table("conversations").select("*").eq("id", conversation_id).execute()
+            if check.data:
+                print(f"✅ [Supabase] Updated successfully: {check.data[0].get('context')}")
+            
             return True
         except Exception as e:
             print(f"❌ [Supabase] Update conversation error: {e}")
@@ -143,7 +154,7 @@ class SupabaseService:
     async def save_message(
         self,
         conversation_id: str,
-        sender: str,  # "customer" or "bot" or "provider"
+        sender: str,
         content: str,
         metadata: Optional[Dict] = None
     ) -> bool:
@@ -171,6 +182,7 @@ class SupabaseService:
         
         try:
             result = self.client.table("messages").select("*").eq("conversation_id", conversation_id).order("created_at", desc=False).limit(limit).execute()
+            print(f"💬 [Supabase] Retrieved {len(result.data)} messages")
             return result.data
         except Exception as e:
             print(f"❌ [Supabase] Get messages error: {e}")
@@ -191,10 +203,9 @@ class SupabaseService:
     ) -> Dict[str, Any]:
         """إنشاء طلب خدمة جديد"""
         if not self.client:
-            return {"success": True, "request_id": "mock-req-123"}
+            return {"success": True, "request_id": "mock-req-123", "slug": "mock-slug"}
         
         try:
-            # إنشاء slug للصفحة
             import uuid
             slug = str(uuid.uuid4())[:8]
             
@@ -232,7 +243,7 @@ class SupabaseService:
             return None
     
     async def get_request_by_slug(self, slug: str) -> Optional[Dict]:
-        """الحصول على طلب عبر slug صفحة العروض"""
+        """الحصول على طلب عبر slug"""
         if not self.client:
             return None
         
@@ -253,14 +264,12 @@ class SupabaseService:
         city: str,
         limit: int = 5
     ) -> List[Dict]:
-        """البحث عن مزودين مطابقين"""
+        """البحث عن مزودين"""
         if not self.client:
             return []
         
         try:
-            # البحث عن مزودين نشطين في نفس الخدمة والمدينة
             result = self.client.table("providers").select("*").eq("status", "active").ilike("services", f"%{service_type}%").ilike("city", f"%{city}%").order("rating", desc=True).limit(limit).execute()
-            
             return result.data
         except Exception as e:
             print(f"❌ [Supabase] Search providers error: {e}")
@@ -303,54 +312,23 @@ class SupabaseService:
                 "created_at": datetime.utcnow().isoformat()
             }).execute()
             
-            return {
-                "success": True,
-                "offer_id": result.data[0]["id"]
-            }
+            return {"success": True, "offer_id": result.data[0]["id"]}
         except Exception as e:
             print(f"❌ [Supabase] Save provider offer error: {e}")
             return {"success": False, "error": str(e)}
     
     async def get_offers_for_request(self, request_id: str) -> List[Dict]:
-        """الحصول على عروض طلب معين"""
+        """الحصول على عروض طلب"""
         if not self.client:
             return []
         
         try:
-            result = self.client.table("provider_offers").select("*, providers(*)").eq("request_id", request_id).order("created_at", desc=False).execute()
+            result = self.client.table("provider_offers").select("*, providers(*)").eq("request_id", request_id).execute()
             return result.data
         except Exception as e:
             print(f"❌ [Supabase] Get offers error: {e}")
             return []
-    
-    # ============================================
-    # Categories & Cities
-    # ============================================
-    
-    async def get_categories(self) -> List[Dict]:
-        """الحصول على قائمة التصنيفات"""
-        if not self.client:
-            return []
-        
-        try:
-            result = self.client.table("categories").select("*").order("name").execute()
-            return result.data
-        except Exception as e:
-            print(f"❌ [Supabase] Get categories error: {e}")
-            return []
-    
-    async def get_cities(self) -> List[Dict]:
-        """الحصول على قائمة المدن"""
-        if not self.client:
-            return []
-        
-        try:
-            result = self.client.table("cities").select("*").order("name").execute()
-            return result.data
-        except Exception as e:
-            print(f"❌ [Supabase] Get cities error: {e}")
-            return []
 
 
-# إنشاء instance واحد
+# إنشاء instance
 supabase_service = SupabaseService()
