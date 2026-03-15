@@ -1,83 +1,73 @@
 """
-Reception Agent - وكيل الاستقبال
-مع In-Memory Context للتجربة السريعة
+Reception Agent - وكيل الاستقبال البسيط
 """
 
 import re
 from typing import Dict, Any, Optional, List
-from services.deepseek_service import deepseek_service
-from services.supabase_service import supabase_service
-from services.twilio_service import twilio_service
-from config import APP_URL
-
 
 # In-Memory Context Store
 CONTEXT_STORE: Dict[str, Dict] = {}
 
-
 # كلمات التأكيد
-CONFIRM_WORDS = ["نعم", "صح", "صحيح", "تمام", "اكيد", "ابحث", "ابدأ", "تم", "آبحث", "أبحث", "نعم صح", "نعم صحيح", "أيوة"]
+CONFIRM_WORDS = ["نعم", "صح", "صحيح", "تمام", "اكيد", "ابحث", "ابدأ", "تم", "آبحث", "أبحث", "أيوة"]
 
 # المدن
-KNOWN_CITIES = ["الرياض", "جدة", "مكة", "المدينة", "الدمام", "الخبر", "الطائف", "تبوك", "بريدة", "خميس مشيط", "الهفوف", "حائل", "نجران", "أبها", "جازان"]
+KNOWN_CITIES = ["الرياض", "جدة", "مكة", "المدينة", "الدمام", "الخبر", "الطائف", "تبوك", "بريدة", "خميس مشيط", "الهفوف", "حائل", "نجران", "أبها", "جازان", "القصيم", "القطيف", "الأحساء"]
 
-# الخدمات  
-KNOWN_SERVICES = ["سباك", "سباكة", "كهرباء", "كهربائي", "تنظيف", "نظافة", "تكييف", "مكيفات", "نقل", "عفش", "أثاث", "صباغ", "صباغة", "نجار", "نجارة"]
+# الخدمات
+SERVICE_KEYWORDS = {
+    "سباكة": ["سباك", "سباكة", "تسريب", "مويه", "مياه", "حمام", "مطبخ"],
+    "كهرباء": ["كهرب", "كهرباء", "تمديد", "أسلاك", "مفتاح", "فيش"],
+    "تنظيف": ["تنظيف", "نظاف", "تعقيم", "غسيل", "سجاد", "موكيت"],
+    "تكييف": ["تكييف", "مكيف", "تبريد", "فريون", "سبلت"],
+    "نقل عفش": ["نقل", "عفش", "أثاث", "انتقال", "أغراض"],
+    "صباغة": ["صباغ", "صباغة", "دهان", "طلاء", "لون"],
+    "نجارة": ["نجار", "نجارة", "خشب", "أبواب", "مطابخ"]
+}
 
 
 class ReceptionAgent:
-    def __init__(self):
-        pass
     
     def _normalize_phone(self, phone: str) -> str:
-        """تطبيع رقم الهاتف"""
         return phone.replace(" ", "").replace("+", "").replace("whatsapp:", "")
     
-    def _extract_from_message(self, message: str) -> Dict:
+    def _extract_info(self, message: str) -> Dict:
         """استخراج المعلومات من الرسالة"""
         data = {}
-        msg_lower = message.lower()
         
-        # الخدمة
-        for s in KNOWN_SERVICES:
-            if s in msg_lower:
-                if "سباك" in s:
-                    data["service_type"] = "سباكة"
-                elif "كهرب" in s:
-                    data["service_type"] = "كهرباء"
-                elif "نظاف" in s or "تنظيف" in s:
-                    data["service_type"] = "تنظيف"
-                elif "تكييف" in s or "مكيف" in s:
-                    data["service_type"] = "تكييف"
-                elif "نقل" in s or "عفش" in s:
-                    data["service_type"] = "نقل عفش"
-                elif "صباغ" in s:
-                    data["service_type"] = "صباغة"
-                elif "نجار" in s:
-                    data["service_type"] = "نجارة"
+        # استخراج الخدمة
+        for service, keywords in SERVICE_KEYWORDS.items():
+            for keyword in keywords:
+                if keyword in message:
+                    data["service_type"] = service
+                    break
+            if data.get("service_type"):
                 break
         
-        # المدينة
+        # استخراج المدينة
         for city in KNOWN_CITIES:
             if city in message:
                 data["city"] = city
                 break
         
-        # التفاصيل
-        if "تسريب" in msg_lower or "تسرب" in msg_lower:
+        # استخراج التفاصيل
+        if "تسريب" in message:
             data["details"] = "تسريب مياه"
-        elif "عطل" in msg_lower:
+        elif "عطل" in message:
             data["details"] = "عطل"
+        elif "تركيب" in message:
+            data["details"] = "تركيب"
+        elif "صيانة" in message:
+            data["details"] = "صيانة"
         
         # الميزانية
-        budget_match = re.search(r'(\d+)\s*(ريال|ر\.س)', msg_lower)
+        budget_match = re.search(r'(\d+)\s*(ريال|ر\.س)', message)
         if budget_match:
             data["budget"] = f"{budget_match.group(1)} ريال"
         
         return data
     
-    def _is_confirming(self, message: str) -> bool:
-        """التحقق من التأكيد"""
+    def _is_confirmed(self, message: str) -> bool:
         return any(w in message for w in CONFIRM_WORDS)
     
     async def process_message(
@@ -91,72 +81,46 @@ class ReceptionAgent:
         """معالجة الرسالة"""
         
         phone_key = self._normalize_phone(customer_phone)
-        print(f"🤖 [Agent] Phone key: {phone_key}")
+        print(f"🤖 [Agent] Phone: {phone_key}, Message: {message}")
         
-        # استرجاع السياق من الذاكرة
-        if phone_key in CONTEXT_STORE:
-            context = CONTEXT_STORE[phone_key]
-            print(f"📋 [Agent] Found context: {context}")
-        else:
-            context = {"extracted_data": {}, "stage": "collecting"}
-            print(f"🆕 [Agent] New context")
-        
+        # استرجاع أو إنشاء سياق
+        context = CONTEXT_STORE.get(phone_key, {"extracted_data": {}, "stage": "collecting"})
         extracted_data = context.get("extracted_data", {})
+        print(f"📋 [Agent] Current data: {extracted_data}")
         
         # التحقق من التأكيد
-        if self._is_confirming(message):
+        if self._is_confirmed(message):
             if extracted_data.get("service_type") and extracted_data.get("city"):
-                print("✅ [Agent] Confirmed! Starting search...")
+                print("✅ [Agent] Confirmed with complete data!")
                 
-                # إنشاء طلب
-                request_result = await supabase_service.create_service_request(
-                    conversation_id=conversation_id,
-                    customer_phone=customer_phone,
-                    service_type=extracted_data.get("service_type"),
-                    city=extracted_data.get("city"),
-                    details=extracted_data.get("details"),
-                    budget=extracted_data.get("budget")
-                )
+                # مسح السياق
+                if phone_key in CONTEXT_STORE:
+                    del CONTEXT_STORE[phone_key]
                 
-                if request_result.get("success"):
-                    request_id = request_result.get("request_id")
-                    slug = request_result.get("slug")
-                    offer_url = f"{APP_URL}/offers/{slug}"
-                    
-                    # مسح السياق
-                    if phone_key in CONTEXT_STORE:
-                        del CONTEXT_STORE[phone_key]
-                    
-                    reply = f"""✅ *تم استلام طلبك!*
+                return {
+                    "reply": f"""✅ *تم استلام طلبك!*
 
 📋 *الخدمة:* {extracted_data.get('service_type')}
 📍 *المدينة:* {extracted_data.get('city')}
-📝 *التفاصيل:* {extracted_data.get('details', 'غير محددة')}
+{f"📝 *التفاصيل:* {extracted_data.get('details')}" if extracted_data.get('details') else ''}
 
 🔍 جاري البحث عن أفضل المزودين...
 
-🔗 *صفحة العروض:*
-{offer_url}
-
-⏰ صلاحية الصفحة: ساعتين"""
-                    
-                    return {
-                        "reply": reply,
-                        "extracted_data": extracted_data,
-                        "ready_for_matching": True,
-                        "request_id": request_id
-                    }
+سيصلك رابط صفحة العروض قريباً! 📬""",
+                    "extracted_data": extracted_data,
+                    "ready_for_matching": True
+                }
         
         # استخراج معلومات جديدة
-        new_data = self._extract_from_message(message)
+        new_data = self._extract_info(message)
         print(f"📊 [Agent] Extracted: {new_data}")
         
         # دمج
         merged = {**extracted_data, **new_data}
         print(f"🔄 [Agent] Merged: {merged}")
         
-        # حفظ في الذاكرة
-        CONTEXT_STORE[phone_key] = {"extracted_data": merged, "stage": "collecting"}
+        # حفظ
+        CONTEXT_STORE[phone_key] = {"extracted_data": merged}
         
         # توليد الرد
         if merged.get("service_type") and merged.get("city"):
