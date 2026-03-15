@@ -1,0 +1,22 @@
+# Hudhudbot Dependencies
+# متطلبات هدهد بوت
+
+# Web Framework
+fastapi>=0.109.0
+uvicorn>=0.27.0
+python-multipart>=0.0.6
+
+# Twilio
+twilio>=8.11.0
+
+# Supabase
+supabase>=2.3.0
+
+# HTTP Client
+httpx>=0.26.0
+
+# Environment Variables
+python-dotenv>=1.0.0
+
+# Utils
+pydantic>=2.5.0
