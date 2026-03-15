@@ -13,75 +13,11 @@ from config import APP_URL
 class ReceptionAgent:
     """
     وكيل الاستقبال - الوكيل الأول في النظام
-    
-    المسؤوليات:
-    1. ترحيب العميل
-    2. فهم نوع الخدمة المطلوبة
-    3. استخراج المعلومات (خدمة، مدينة، تفاصيل، ميزانية)
-    4. تأكيد المعلومات مع العميل
-    5. إنشاء طلب خدمة وصفحة عروض
     """
     
-    # System Prompt للوكيل - محسّن للحفاظ على السياق
-    SYSTEM_PROMPT = """
-أنت وكيل الاستقبال في منصة "هدهد" للخدمات.
-دورك: فهم طلب العميل واستخراج المعلومات المطلوبة.
-
-## مهمتك:
-1. تابع المحادثة مع العميل بشكل طبيعي
-2. استخرج المعلومات التالية تدريجياً:
-   - نوع الخدمة (سباكة، كهرباء، تنظيف، نقل، إلخ)
-   - المدينة/المنطقة
-   - تفاصيل إضافية (المشكلة، المساحة، الموعد)
-   - الميزانية (إن وجدت)
-
-## قواعد مهمة جداً:
-- تذكر كل ما قاله العميل في المحادثة
-- لا تسأل عن معلومة سبق وذكرها العميل
-- إذا العميل أكد المعلومات (قال: نعم/صح/صحيح/تمام)، قل: "تمام! جاري البحث..."
-- كن مختصراً ومباشراً
-- تحدث بالعربية الفصحى البسيطة
-- استخدم الإيموجي بشكل معتدل
-
-## أمثلة:
-العميل: "أبي سباك في الرياض"
-الرد: "أهلاً! 🙋‍♂️ سباك في الرياض - فهمت!
-وش المشكلة بالضبط؟ (تسريب، تركيب، صيانة؟)"
-
-العميل: "في تسريب مويه في الحمام"
-الرد: "تمام! ✅
-- 🔧 الخدمة: سباكة
-- 📍 المدينة: الرياض  
-- 📝 المشكلة: تسريب مياه في الحمام
-
-صحيح؟ وإذا عندك ميزانية معينة ذكرها."
-
-العميل: "نعم صحيح ابحث لي"
-الرد: "تمام! 🔍 جاري البحث عن أفضل السباكين في الرياض..."
-"""
-
-    # Prompt لاستخراج البيانات المنظمة - محسّن
-    EXTRACTION_PROMPT = """
-أنت مساعد ذكي لاستخراج البيانات من محادثة.
-
-من المحادثة كاملة، استخرج المعلومات وأعدها بتنسيق JSON فقط:
-
-{
-    "service_type": "نوع الخدمة (من المحادثة) أو null",
-    "city": "المدينة (من المحادثة) أو null", 
-    "details": "التفاصيل (من المحادثة) أو null",
-    "budget": "الميزانية (من المحادثة) أو null",
-    "is_confirmed": true/false
-}
-
-قواعد مهمة:
-- اجمع المعلومات من كل المحادثة، ليس فقط آخر رسالة
-- إذا العميل قال "نعم" أو "صح" أو "صحيح" أو "تمام" أو "أكد" أو "ابحث" → is_confirmed = true
-- أعد JSON فقط بدون أي نص إضافي
-"""
-    
     def __init__(self):
-        pass
+        # تخزين مؤقت للبيانات المستخرجة خلال المحادثة
+        self.session_data: Dict[str, Dict] = {}
     
     async def process_message(
         self,
@@ -93,26 +29,22 @@ class ReceptionAgent:
     ) -> Dict[str, Any]:
         """
         معالجة رسالة العميل
-        
-        Args:
-            customer_phone: رقم هاتف العميل
-            message: نص الرسالة
-            conversation_id: معرف المحادثة
-            conversation_history: تاريخ المحادثة
-            current_context: السياق الحالي (البيانات المستخرجة سابقاً)
-        
-        Returns:
-            {
-                "reply": str,
-                "extracted_data": dict,
-                "ready_for_matching": bool,
-                "request_id": str (if created)
-            }
         """
         print(f"🤖 [ReceptionAgent] Processing: {message[:50]}...")
-        print(f"📋 [ReceptionAgent] History length: {len(conversation_history)}")
         
-        # بناء تاريخ المحادثة للسياق
+        # استخراج البيانات من السياق السابق
+        previous_data = {}
+        if current_context and current_context.get("extracted_data"):
+            previous_data = current_context["extracted_data"]
+            print(f"📋 [ReceptionAgent] Previous data: {previous_data}")
+        
+        # بناء ملخص المعلومات المعروفة
+        known_info = self._format_known_info(previous_data)
+        
+        # System Prompt محسّن
+        system_prompt = self._build_system_prompt(known_info)
+        
+        # بناء تاريخ المحادثة
         chat_history = []
         for msg in conversation_history:
             role = "user" if msg["sender"] == "customer" else "assistant"
@@ -121,66 +53,59 @@ class ReceptionAgent:
         # إضافة الرسالة الحالية
         chat_history.append({"role": "user", "content": message})
         
-        # استخراج البيانات من المحادثة كاملة
-        extracted_data = await self._extract_data(message, chat_history, current_context)
-        
-        # دمج البيانات المستخرجة مع السياق السابق
-        if current_context and current_context.get("extracted_data"):
-            previous_data = current_context["extracted_data"]
-            # دمج البيانات - البيانات الجديدة تسبق
-            merged_data = {**previous_data, **{k: v for k, v in extracted_data.items() if v is not None}}
-            extracted_data = merged_data
-        
-        print(f"📊 [ReceptionAgent] Extracted data: {extracted_data}")
-        
-        # إرسال للـ AI للفهم والرد
+        # إرسال للـ AI
         ai_response = await deepseek_service.chat(
             messages=chat_history,
-            system_prompt=self.SYSTEM_PROMPT
+            system_prompt=system_prompt
         )
         
         if not ai_response["success"]:
             return {
                 "reply": "عذراً، حدث خطأ تقني. يرجى المحاولة مرة أخرى.",
-                "extracted_data": extracted_data,
+                "extracted_data": previous_data,
                 "ready_for_matching": False
             }
         
         reply = ai_response["content"]
         
-        # التحقق إذا كان العميل أكد المعلومات
+        # استخراج البيانات من المحادثة كاملة
+        new_data = await self._extract_all_data(chat_history)
+        
+        # دمج البيانات - البيانات الجديدة تسبق
+        merged_data = {**previous_data, **{k: v for k, v in new_data.items() if v}}
+        print(f"📊 [ReceptionAgent] Merged data: {merged_data}")
+        
+        # التحقق من التأكيد
+        confirmation_words = ["نعم", "صح", "صحيح", "تمام", "أيوة", "اكيد", "ابحث", "ابدأ", "سوي", "تم", "نعم صح", "نعم صحيح", "أبحث"]
+        is_confirmed = any(word in message for word in confirmation_words)
+        
         ready_for_matching = False
         request_id = None
         
-        # التحقق من التأكيد
-        confirmation_words = ["نعم", "صح", "صحيح", "تمام", "أيوة", "اكيد", "ابحث", "آبحث", "ابدأ", "سوي", "نعم صح", "نعم صحيح"]
-        is_confirmed = any(word in message.lower() for word in confirmation_words)
-        
-        if is_confirmed and self._is_data_complete(extracted_data):
+        # التحقق من اكتمال البيانات والتأكيد
+        if is_confirmed and merged_data.get("service_type") and merged_data.get("city"):
             ready_for_matching = True
             
             # إنشاء طلب خدمة
             request_result = await supabase_service.create_service_request(
                 conversation_id=conversation_id,
                 customer_phone=customer_phone,
-                service_type=extracted_data.get("service_type"),
-                city=extracted_data.get("city"),
-                details=extracted_data.get("details"),
-                budget=extracted_data.get("budget")
+                service_type=merged_data.get("service_type"),
+                city=merged_data.get("city"),
+                details=merged_data.get("details"),
+                budget=merged_data.get("budget")
             )
             
             if request_result.get("success"):
                 request_id = request_result.get("request_id")
                 slug = request_result.get("slug")
                 
-                # إرسال رسالة التأكيد مع رابط الصفحة
                 offer_url = f"{APP_URL}/offers/{slug}"
-                confirmation_msg = f"""
-✅ *تم استلام طلبك!*
+                reply = f"""✅ *تم استلام طلبك!*
 
-📋 *الخدمة:* {extracted_data.get('service_type')}
-📍 *المدينة:* {extracted_data.get('city')}
-📝 *التفاصيل:* {extracted_data.get('details', 'غير محددة')}
+📋 *الخدمة:* {merged_data.get('service_type')}
+📍 *المدينة:* {merged_data.get('city')}
+📝 *التفاصيل:* {merged_data.get('details', 'غير محددة')}
 
 🔍 جاري البحث عن أفضل المزودين...
 
@@ -189,62 +114,92 @@ class ReceptionAgent:
 
 ⏰ صلاحية الصفحة: ساعتين
 
-سيصلك تنبيه عند وصول عروض جديدة! 📬
-                """.strip()
-                
-                reply = confirmation_msg
+سيصلك تنبيه عند وصول عروض جديدة! 📬"""
         
         return {
             "reply": reply,
-            "extracted_data": extracted_data,
+            "extracted_data": merged_data,
             "ready_for_matching": ready_for_matching,
             "request_id": request_id
         }
     
-    async def _extract_data(
-        self,
-        message: str,
-        chat_history: List[Dict],
-        current_context: Dict = None
-    ) -> Optional[Dict]:
-        """
-        استخراج البيانات المنظمة من المحادثة كاملة
-        """
-        # بناء ملخص المحادثة للاستخراج
+    def _build_system_prompt(self, known_info: str) -> str:
+        """بناء System Prompt مع المعلومات المعروفة"""
+        return f"""أنت وكيل الاستقبال في منصة "هدهد" للخدمات.
+
+## المعلومات المعروفة مسبقاً:
+{known_info if known_info else "لا توجد معلومات بعد."}
+
+## قواعد مهمة جداً:
+1. **لا تسأل عن معلومة معروفة مسبقاً** - إذا العميل قال "الرياض" لا تسأل عن المدينة مرة أخرى
+2. **تابع المحادثة بشكل طبيعي** - ركز على المعلومات الناقصة فقط
+3. **إذا العميل أكد (نعم/صح/صحيح/تمام/ابحث)** - قل "تمام! جاري البحث..." ولاتسأل شي آخر
+4. **كن مختصراً** - لا تطيل الرد
+5. **تحدث بالعربية الفصحى البسيطة**
+
+## المعلومات المطلوبة:
+- نوع الخدمة (سباكة، كهرباء، تنظيف...)
+- المدينة
+- تفاصيل المشكلة (اختياري)
+- الميزانية (اختياري)
+
+## أمثلة:
+- إذا العميل قال "أبي سباك في الرياض" → لا تسأل عن المدينة! اسأل عن المشكلة فقط
+- إذا العميل قال "نعم صحيح" → قل "تمام! جاري البحث..."
+- إذا العميل أعطاك تفاصيل إضافية → أكد المعلومات واطلب التأكيد"""
+
+    def _format_known_info(self, data: Dict) -> str:
+        """تنسيق المعلومات المعروفة"""
+        if not data:
+            return ""
+        
+        parts = []
+        if data.get("service_type"):
+            parts.append(f"🔧 الخدمة: {data['service_type']}")
+        if data.get("city"):
+            parts.append(f"📍 المدينة: {data['city']}")
+        if data.get("details"):
+            parts.append(f"📝 التفاصيل: {data['details']}")
+        if data.get("budget"):
+            parts.append(f"💰 الميزانية: {data['budget']}")
+        
+        return "\n".join(parts)
+    
+    async def _extract_all_data(self, chat_history: List[Dict]) -> Dict:
+        """استخراج جميع البيانات من المحادثة"""
+        
+        extraction_prompt = """من المحادثة التالية، استخرج جميع المعلومات المتوفرة:
+
+{
+    "service_type": "نوع الخدمة أو null",
+    "city": "المدينة أو null",
+    "details": "التفاصيل أو null", 
+    "budget": "الميزانية أو null"
+}
+
+قواعد:
+- استخرج من كل الرسائل، ليس فقط الأخيرة
+- إذا ذُكرت معلومة في أي رسالة، احفظها
+- أعد JSON فقط"""
+
         conversation_text = "\n".join([
             f"{'عميل' if msg['role'] == 'user' else 'بوت'}: {msg['content']}"
             for msg in chat_history
         ])
         
-        # إضافة السياق السابق إن وجد
-        if current_context and current_context.get("extracted_data"):
-            context_info = f"\n[البيانات المعروفة مسبقاً: {current_context['extracted_data']}]"
-            conversation_text += context_info
-        
         result = await deepseek_service.extract_structured_data(
             user_message=conversation_text,
-            fields=["service_type", "city", "details", "budget", "is_confirmed"],
-            system_prompt=self.EXTRACTION_PROMPT
+            fields=["service_type", "city", "details", "budget"],
+            system_prompt=extraction_prompt
         )
         
-        if result.get("success"):
-            return result.get("data")
+        if result.get("success") and result.get("data"):
+            return result["data"]
         
-        return None
-    
-    def _is_data_complete(self, data: Dict) -> bool:
-        """
-        التحقق من اكتمال البيانات الأساسية
-        """
-        return (
-            data.get("service_type") is not None and
-            data.get("city") is not None
-        )
+        return {}
     
     async def send_welcome(self, customer_phone: str) -> Dict[str, Any]:
-        """
-        إرسال رسالة الترحيب للعميل الجديد
-        """
+        """إرسال رسالة الترحيب"""
         return twilio_service.send_welcome(customer_phone)
 
 
