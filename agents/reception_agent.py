@@ -34,12 +34,14 @@ class ReceptionAgent:
     def _extract_info(self, message: str) -> Dict:
         """استخراج المعلومات من الرسالة"""
         data = {}
+        print(f"🔍 [_extract_info] Analyzing: {message}")
         
         # استخراج الخدمة
         for service, keywords in SERVICE_KEYWORDS.items():
             for keyword in keywords:
                 if keyword in message:
                     data["service_type"] = service
+                    print(f"✅ [_extract_info] Found service: {service} (keyword: {keyword})")
                     break
             if data.get("service_type"):
                 break
@@ -48,23 +50,10 @@ class ReceptionAgent:
         for city in KNOWN_CITIES:
             if city in message:
                 data["city"] = city
+                print(f"✅ [_extract_info] Found city: {city}")
                 break
         
-        # استخراج التفاصيل
-        if "تسريب" in message:
-            data["details"] = "تسريب مياه"
-        elif "عطل" in message:
-            data["details"] = "عطل"
-        elif "تركيب" in message:
-            data["details"] = "تركيب"
-        elif "صيانة" in message:
-            data["details"] = "صيانة"
-        
-        # الميزانية
-        budget_match = re.search(r'(\d+)\s*(ريال|ر\.س)', message)
-        if budget_match:
-            data["budget"] = f"{budget_match.group(1)} ريال"
-        
+        print(f"📊 [_extract_info] Result: {data}")
         return data
     
     def _is_confirmed(self, message: str) -> bool:
