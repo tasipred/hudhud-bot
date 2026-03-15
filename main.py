@@ -67,10 +67,12 @@ async def handle_message(
         نص الرد
     """
     start_time = time.time()
-    print(f"📨 [Handler] From: {from_number} | Message: {message_body[:50]}...")
+    print(f"📨 [Handler] From: {from_number} | Message: {message_body}")
     
     # حالة جديدة - أول رسالة
     if not conversation:
+        print("🆕 [Handler] New conversation")
+        
         # إنشاء محادثة جديدة
         result = await supabase_service.create_conversation(
             customer_phone=from_number,
@@ -78,6 +80,7 @@ async def handle_message(
         )
         
         conversation_id = result.get("conversation_id")
+        print(f"📝 [Handler] Created conversation: {conversation_id}")
         
         # حفظ الرسالة
         await supabase_service.save_message(
@@ -91,7 +94,8 @@ async def handle_message(
             customer_phone=from_number,
             message=message_body,
             conversation_id=conversation_id,
-            conversation_history=[]  # محادثة جديدة
+            conversation_history=[],  # محادثة جديدة
+            current_context=None
         )
         
         reply = agent_result["reply"]
@@ -103,18 +107,11 @@ async def handle_message(
             content=reply
         )
         
-        # تحديث حالة المحادثة
+        # تحديث حالة المحادثة + حفظ البيانات المستخرجة
         await supabase_service.update_conversation(
             conversation_id=conversation_id,
-            status=ConversationState.COLLECTING
-        )
-        
-        # تسجيل في الإحصائيات
-        response_time = time.time() - start_time
-        await manager_agent.log_request(
-            request_id=conversation_id,
-            success=True,
-            response_time=response_time
+            status=ConversationState.COLLECTING,
+            context={"extracted_data": agent_result.get("extracted_data")}
         )
         
         return reply
@@ -123,6 +120,9 @@ async def handle_message(
     status = conversation.get("status", ConversationState.NEW)
     context = conversation.get("context", {})
     conversation_id = conversation.get("id")
+    
+    print(f"📂 [Handler] Existing conversation: {conversation_id}")
+    print(f"📊 [Handler] Status: {status}, Context: {context}")
     
     # حفظ رسالة العميل
     await supabase_service.save_message(
@@ -133,15 +133,17 @@ async def handle_message(
     
     # جلب الرسائل السابقة
     messages = await supabase_service.get_messages(conversation_id)
+    print(f"💬 [Handler] Loaded {len(messages)} messages")
     
     # حسب الحالة
-    if status == ConversationState.COLLECTING:
+    if status in [ConversationState.COLLECTING, ConversationState.NEW]:
         # جاري جمع المعلومات - معالجة عبر وكيل الاستقبال
         agent_result = await reception_agent.process_message(
             customer_phone=from_number,
             message=message_body,
             conversation_id=conversation_id,
-            conversation_history=messages
+            conversation_history=messages,
+            current_context=context
         )
         
         reply = agent_result["reply"]
@@ -153,17 +155,23 @@ async def handle_message(
             content=reply
         )
         
+        # تحديث السياق بالبيانات المستخرجة
+        updated_context = {**context, "extracted_data": agent_result.get("extracted_data")}
+        
         # التحقق إذا كان جاهز للمطابقة
         if agent_result.get("ready_for_matching"):
             # تحديث الحالة
             await supabase_service.update_conversation(
                 conversation_id=conversation_id,
-                status=ConversationState.SEARCHING
+                status=ConversationState.SEARCHING,
+                context=updated_context
             )
             
             # تشغيل وكيل المزودين
             request_id = agent_result.get("request_id")
             extracted_data = agent_result.get("extracted_data", {})
+            
+            print(f"🔍 [Handler] Starting provider search for request: {request_id}")
             
             provider_result = await provider_agent.find_and_contact_providers(
                 request_id=request_id,
@@ -174,11 +182,19 @@ async def handle_message(
                 customer_phone=from_number
             )
             
+            print(f"📤 [Handler] Provider result: {provider_result}")
+            
             # تحديث الحالة
             await supabase_service.update_conversation(
                 conversation_id=conversation_id,
                 status=ConversationState.WAITING,
-                context={"request_id": request_id}
+                context={**updated_context, "request_id": request_id}
+            )
+        else:
+            # فقط تحديث السياق
+            await supabase_service.update_conversation(
+                conversation_id=conversation_id,
+                context=updated_context
             )
         
         return reply
@@ -191,8 +207,6 @@ async def handle_message(
                 conversation_id=conversation_id,
                 status=ConversationState.SEARCHING
             )
-            
-            # TODO: تشغيل وكيل المزودين
             
             return "ممتاز! 🔍 جاري البحث عن أفضل المزودين في منطقتك...\n\nسيصلك رابط صفحة العروض خلال دقائق! ⏳"
         else:
@@ -228,6 +242,45 @@ async def handle_message(
         # العميل يشوف العروض
         return "📋 العروض متاحة على صفحتك!\n\nاختر المزود المناسب وتواصل معه مباشرة 🤝"
     
+    elif status == ConversationState.COMPLETED:
+        # المحادثة انتهت - نبدأ محادثة جديدة
+        print("🔄 [Handler] Conversation completed, creating new one")
+        result = await supabase_service.create_conversation(
+            customer_phone=from_number,
+            initial_message=message_body
+        )
+        conversation_id = result.get("conversation_id")
+        
+        await supabase_service.save_message(
+            conversation_id=conversation_id,
+            sender="customer",
+            content=message_body
+        )
+        
+        agent_result = await reception_agent.process_message(
+            customer_phone=from_number,
+            message=message_body,
+            conversation_id=conversation_id,
+            conversation_history=[],
+            current_context=None
+        )
+        
+        reply = agent_result["reply"]
+        
+        await supabase_service.save_message(
+            conversation_id=conversation_id,
+            sender="bot",
+            content=reply
+        )
+        
+        await supabase_service.update_conversation(
+            conversation_id=conversation_id,
+            status=ConversationState.COLLECTING,
+            context={"extracted_data": agent_result.get("extracted_data")}
+        )
+        
+        return reply
+    
     # رد افتراضي
     return "شكراً لرسالتك! فريق هدهد يهتم بخدمتك. كيف أقدر أساعدك؟"
 
@@ -254,8 +307,8 @@ async def whatsapp_webhook(request: Request):
         if not from_number or not message_body:
             return PlainTextResponse("Missing data", status_code=400)
         
-        # البحث عن محادثة موجودة
-        conversation = await supabase_service.get_conversation_by_phone(from_number)
+        # البحث عن محادثة موجودة (غير مكتملة)
+        conversation = await supabase_service.get_active_conversation_by_phone(from_number)
         
         # معالجة الرسالة
         reply = await handle_message(
@@ -312,9 +365,6 @@ async def provider_webhook(request: Request):
         if result.get("success"):
             # تسجيل العرض
             await manager_agent.log_offer(result.get("offer_id", ""))
-            
-            # إشعار العميل إذا كان أول عرض
-            # TODO: جلب بيانات العميل وإرسال إشعار
         
         # بناء الرد
         twiml_response = MessagingResponse()

@@ -87,6 +87,32 @@ class SupabaseService:
             print(f"❌ [Supabase] Get conversation by phone error: {e}")
             return None
     
+    async def get_active_conversation_by_phone(self, customer_phone: str) -> Optional[Dict]:
+        """
+        الحصول على آخر محادثة نشطة للعميل (غير مكتملة)
+        
+        نشوف المحادثات اللي حالتها مو "completed" و "presenting"
+        """
+        if not self.client:
+            return None
+        
+        try:
+            # جلب آخر محادثة غير مكتملة
+            result = self.client.table("conversations").select("*").eq("customer_phone", customer_phone).neq("status", "completed").order("created_at", desc=True).limit(1).execute()
+            
+            if result.data:
+                conv = result.data[0]
+                # إذا المحادثة في وضع انتظار العروض أو تقديمها، نعتبرها مكتملة
+                if conv.get("status") in ["waiting", "presenting"]:
+                    print(f"ℹ️ [Supabase] Conversation {conv['id']} is in {conv['status']} state, treating as completed")
+                    return None
+                return conv
+            
+            return None
+        except Exception as e:
+            print(f"❌ [Supabase] Get active conversation by phone error: {e}")
+            return None
+    
     async def update_conversation(
         self,
         conversation_id: str,
