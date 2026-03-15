@@ -1,112 +1,84 @@
 """
-Reception Agent - وكيل الاستقبال المحترف
-يبني على منهجية Entity Extraction + Structured Output
+Reception Agent - وكيل الاستقبال
+مع In-Memory Context للتجربة السريعة
 """
 
-import json
 import re
 from typing import Dict, Any, Optional, List
-from pydantic import BaseModel, Field
 from services.deepseek_service import deepseek_service
 from services.supabase_service import supabase_service
 from services.twilio_service import twilio_service
 from config import APP_URL
 
 
-# ============================================
-# Pydantic Models للبيانات المنظمة
-# ============================================
-
-class ExtractedEntities(BaseModel):
-    """الكيانات المستخرجة من رسالة العميل"""
-    service_type: Optional[str] = Field(None, description="نوع الخدمة")
-    city: Optional[str] = Field(None, description="المدينة")
-    neighborhood: Optional[str] = Field(None, description="اسم الحي")
-    details: Optional[str] = Field(None, description="تفاصيل المشكلة")
-    urgency: Optional[str] = Field(None, description="مستوى الاستعجال")
-    time_slot: Optional[str] = Field(None, description="الوقت المفضل")
-    budget: Optional[str] = Field(None, description="الميزانية")
+# In-Memory Context Store
+CONTEXT_STORE: Dict[str, Dict] = {}
 
 
-# ============================================
-# System Prompt للاستخراج
-# ============================================
+# كلمات التأكيد
+CONFIRM_WORDS = ["نعم", "صح", "صحيح", "تمام", "اكيد", "ابحث", "ابدأ", "تم", "آبحث", "أبحث", "نعم صح", "نعم صحيح", "أيوة"]
 
-EXTRACTION_SYSTEM_PROMPT = """أنت محرك استخراج معلومات. من رسالة العميل، استخرج المعلومات المتوفرة فقط.
+# المدن
+KNOWN_CITIES = ["الرياض", "جدة", "مكة", "المدينة", "الدمام", "الخبر", "الطائف", "تبوك", "بريدة", "خميس مشيط", "الهفوف", "حائل", "نجران", "أبها", "جازان"]
 
-أعد النتيجة بتنسيق JSON فقط (بدون أي نص إضافي):
-{
-    "service_type": "نوع الخدمة أو null",
-    "city": "المدينة أو null",
-    "neighborhood": "الحي أو null",
-    "details": "تفاصيل المشكلة أو null",
-    "urgency": "عاجل/اليوم/غداً أو null",
-    "budget": "الميزانية أو null"
-}
-
-ملاحظات:
-- استخرج فقط المعلومات المذكورة صراحة
-- إذا لم توجد معلومة، ضع null
-- لا تخترع معلومات غير موجودة
-
-أمثلة:
-"أبي سباك في الرياض" → {"service_type": "سباكة", "city": "الرياض", ...}
-"عندي تسريب في الحمام" → {"details": "تسريب في الحمام", ...}
-"نعم صحيح" → {} (لا توجد معلومات جديدة)"""
-
-
-REPLY_SYSTEM_PROMPT = """أنت مساعد واتساب ودود ومختصر لمنصة "هدهد" للخدمات.
-
-## قواعد الرد:
-1. كن مختصراً جداً (2-4 أسطر)
-2. استخدم الإيموجي باعتدال
-3. تحدث بالعربية الفصحى البسيطة
-
-## مواقف الرد:
-
-### إذا المعلومات ناقصة:
-اسأل عن الناقص فقط (خدمة أو مدينة)
-
-### إذا المعلومات كاملة:
-أكد المعلومات واطلب التأكيد:
-"تمام! ✅
-- 🔧 [الخدمة]
-- 📍 [المدينة]
-صحيح؟"
-
-### إذا العميل يطلب تعديل:
-"لا مشكلة! وش التعديل؟"
-
-لا تضف أي معلومات غير موجودة."""
+# الخدمات  
+KNOWN_SERVICES = ["سباك", "سباكة", "كهرباء", "كهربائي", "تنظيف", "نظافة", "تكييف", "مكيفات", "نقل", "عفش", "أثاث", "صباغ", "صباغة", "نجار", "نجارة"]
 
 
 class ReceptionAgent:
-    """
-    وكيل الاستقبال المحترف
-    """
-    
-    # كلمات التأكيد
-    CONFIRM_WORDS = ["نعم", "صح", "صحيح", "تمام", "اكيد", "ابحث", "ابدأ", "تم", "آبحث", "أبحث", "نعم صح", "نعم صحيح", "أيوة"]
-    
-    # كلمات التعديل
-    EDIT_WORDS = ["لا", "خطأ", "غلط", "تعديل", "غير", "لا صح", "مو صح"]
-    
-    # المدن المعروفة
-    KNOWN_CITIES = [
-        "الرياض", "جدة", "مكة", "المدينة", "الدمام", "الخبر", "الظهران", 
-        "الطائف", "تبوك", "بريدة", "خميس مشيط", "الهفوف", "المبرز", 
-        "حفر الباطن", "حائل", "نجران", "الجبيل", "ينبع", "القصيم", "جازان", "أبها"
-    ]
-    
-    # الخدمات المعروفة
-    KNOWN_SERVICES = [
-        "سباك", "سباكة", "كهرباء", "كهربائي", "تنظيف", "نظافة", "تكييف", 
-        "مكيفات", "نقل", "عفش", "أثاث", "صباغ", "صباغة", "نجار", "نجارة",
-        "حداد", "حدادة", "تسليك", "صيانة", "تمديد", "تركيب", "إصلاح", "تصليح"
-    ]
-    
     def __init__(self):
         pass
+    
+    def _normalize_phone(self, phone: str) -> str:
+        """تطبيع رقم الهاتف"""
+        return phone.replace(" ", "").replace("+", "").replace("whatsapp:", "")
+    
+    def _extract_from_message(self, message: str) -> Dict:
+        """استخراج المعلومات من الرسالة"""
+        data = {}
+        msg_lower = message.lower()
+        
+        # الخدمة
+        for s in KNOWN_SERVICES:
+            if s in msg_lower:
+                if "سباك" in s:
+                    data["service_type"] = "سباكة"
+                elif "كهرب" in s:
+                    data["service_type"] = "كهرباء"
+                elif "نظاف" in s or "تنظيف" in s:
+                    data["service_type"] = "تنظيف"
+                elif "تكييف" in s or "مكيف" in s:
+                    data["service_type"] = "تكييف"
+                elif "نقل" in s or "عفش" in s:
+                    data["service_type"] = "نقل عفش"
+                elif "صباغ" in s:
+                    data["service_type"] = "صباغة"
+                elif "نجار" in s:
+                    data["service_type"] = "نجارة"
+                break
+        
+        # المدينة
+        for city in KNOWN_CITIES:
+            if city in message:
+                data["city"] = city
+                break
+        
+        # التفاصيل
+        if "تسريب" in msg_lower or "تسرب" in msg_lower:
+            data["details"] = "تسريب مياه"
+        elif "عطل" in msg_lower:
+            data["details"] = "عطل"
+        
+        # الميزانية
+        budget_match = re.search(r'(\d+)\s*(ريال|ر\.س)', msg_lower)
+        if budget_match:
+            data["budget"] = f"{budget_match.group(1)} ريال"
+        
+        return data
+    
+    def _is_confirming(self, message: str) -> bool:
+        """التحقق من التأكيد"""
+        return any(w in message for w in CONFIRM_WORDS)
     
     async def process_message(
         self,
@@ -116,247 +88,97 @@ class ReceptionAgent:
         conversation_history: List[Dict],
         current_context: Dict = None
     ) -> Dict[str, Any]:
-        """
-        معالجة رسالة العميل
-        """
-        print(f"🤖 [ReceptionAgent] Processing: {message}")
+        """معالجة الرسالة"""
         
-        # استخراج البيانات السابقة
-        previous_entities = self._get_previous_entities(current_context)
-        print(f"📋 [ReceptionAgent] Previous entities: {previous_entities}")
+        phone_key = self._normalize_phone(customer_phone)
+        print(f"🤖 [Agent] Phone key: {phone_key}")
         
-        # التحقق من التأكيد أو التعديل
-        is_confirming = self._is_confirmation(message)
-        is_editing = self._is_edit(message)
+        # استرجاع السياق من الذاكرة
+        if phone_key in CONTEXT_STORE:
+            context = CONTEXT_STORE[phone_key]
+            print(f"📋 [Agent] Found context: {context}")
+        else:
+            context = {"extracted_data": {}, "stage": "collecting"}
+            print(f"🆕 [Agent] New context")
         
-        print(f"✅ [ReceptionAgent] Confirming: {is_confirming}, Editing: {is_editing}")
+        extracted_data = context.get("extracted_data", {})
         
-        # إذا العميل يؤكد والبيانات كاملة
-        if is_confirming and previous_entities.service_type and previous_entities.city:
-            print("🎯 [ReceptionAgent] Confirmation with complete data - starting search")
-            return await self._handle_confirmation(
-                customer_phone, conversation_id, previous_entities
-            )
-        
-        # إذا العميل يعدل
-        if is_editing:
-            return {
-                "reply": "لا مشكلة! 😊 أخبرني بالمعلومات الصحيحة.",
-                "extracted_data": previous_entities.model_dump(),
-                "ready_for_matching": False
-            }
-        
-        # استخراج معلومات جديدة من الرسالة
-        new_entities = await self._extract_entities(message)
-        print(f"📊 [ReceptionAgent] New entities: {new_entities}")
-        
-        # دمج المعلومات
-        merged_entities = self._merge_entities(previous_entities, new_entities)
-        print(f"🔄 [ReceptionAgent] Merged entities: {merged_entities}")
-        
-        # توليد الرد
-        reply = self._generate_reply(merged_entities, message)
-        
-        # التحقق إذا جاهز للتأكيد
-        if merged_entities.service_type and merged_entities.city:
-            # البيانات كاملة - ننتظر التأكيد
-            pass
-        
-        return {
-            "reply": reply,
-            "extracted_data": merged_entities.model_dump(),
-            "ready_for_matching": False
-        }
-    
-    def _get_previous_entities(self, current_context: Dict) -> ExtractedEntities:
-        """استخراج الكيانات السابقة من السياق"""
-        if current_context and current_context.get("extracted_data"):
-            try:
-                return ExtractedEntities(**current_context["extracted_data"])
-            except:
-                pass
-        return ExtractedEntities()
-    
-    def _is_confirmation(self, message: str) -> bool:
-        """التحقق من كلمات التأكيد"""
-        msg_clean = message.strip()
-        return any(word in msg_clean for word in self.CONFIRM_WORDS)
-    
-    def _is_edit(self, message: str) -> bool:
-        """التحقق من كلمات التعديل"""
-        msg_clean = message.strip().lower()
-        return any(word in msg_clean for word in self.EDIT_WORDS)
-    
-    async def _extract_entities(self, message: str) -> ExtractedEntities:
-        """استخراج الكيانات من الرسالة"""
-        
-        # أولاً: استخراج سريع بالكلمات المفتاحية
-        entities = ExtractedEntities()
-        msg_lower = message.lower()
-        
-        # استخراج الخدمة
-        for service in self.KNOWN_SERVICES:
-            if service in msg_lower:
-                if "سباك" in service:
-                    entities.service_type = "سباكة"
-                elif "كهرب" in service:
-                    entities.service_type = "كهرباء"
-                elif "نظاف" in service or "تنظيف" in service:
-                    entities.service_type = "تنظيف"
-                elif "تكييف" in service or "مكيف" in service:
-                    entities.service_type = "تكييف"
-                elif "نقل" in service or "عفش" in service:
-                    entities.service_type = "نقل عفش"
-                elif "صباغ" in service:
-                    entities.service_type = "صباغة"
-                elif "نجار" in service:
-                    entities.service_type = "نجارة"
-                else:
-                    entities.service_type = service
-                break
-        
-        # استخراج المدينة
-        for city in self.KNOWN_CITIES:
-            if city in message:
-                entities.city = city
-                break
-        
-        # استخراج التفاصيل
-        details_patterns = [
-            (r"تسريب?\s*(في|ب)?\s*(الحمام|المطبخ|البيت|الدور)?", "تسريب مياه"),
-            (r"عطل\s*(في)?", "عطل"),
-            (r"تركيب\s*(في)?", "تركيب"),
-            (r"صيانة\s*(ل)?", "صيانة"),
-        ]
-        for pattern, detail in details_patterns:
-            if re.search(pattern, msg_lower):
-                entities.details = detail
-                break
-        
-        # استخراج الميزانية
-        budget_match = re.search(r'(\d+)\s*(ريال|ر\.س)', msg_lower)
-        if budget_match:
-            entities.budget = f"{budget_match.group(1)} ريال"
-        
-        # استخراج الاستعجال
-        if any(w in msg_lower for w in ["عاجل", "ضروري", "الآن", "اليوم"]):
-            entities.urgency = "عاجل"
-        elif "غداً" in msg_lower or "بكره" in msg_lower:
-            entities.urgency = "غداً"
-        
-        # إذا وجدنا معلومات كافية، نرجعها
-        if entities.service_type or entities.city or entities.details:
-            return entities
-        
-        # إذا لم نجد شيئاً، نستخدم AI
-        try:
-            ai_result = await deepseek_service.chat(
-                messages=[{"role": "user", "content": message}],
-                system_prompt=EXTRACTION_SYSTEM_PROMPT
-            )
-            
-            if ai_result["success"]:
-                content = ai_result["content"].strip()
-                # استخراج JSON
-                if "{" in content and "}" in content:
-                    start = content.find("{")
-                    end = content.rfind("}") + 1
-                    json_str = content[start:end]
-                    data = json.loads(json_str)
-                    return ExtractedEntities(**data)
-        except Exception as e:
-            print(f"⚠️ [ReceptionAgent] AI extraction failed: {e}")
-        
-        return entities
-    
-    def _merge_entities(self, old: ExtractedEntities, new: ExtractedEntities) -> ExtractedEntities:
-        """دمج الكيانات"""
-        merged = old.model_dump()
-        new_data = new.model_dump()
-        
-        for key, value in new_data.items():
-            if value is not None:
-                merged[key] = value
-        
-        return ExtractedEntities(**merged)
-    
-    def _generate_reply(self, entities: ExtractedEntities, message: str) -> str:
-        """توليد الرد"""
-        
-        # إذا البيانات كاملة
-        if entities.service_type and entities.city:
-            parts = ["تمام! ✅\n"]
-            parts.append(f"- 🔧 الخدمة: {entities.service_type}")
-            parts.append(f"- 📍 المدينة: {entities.city}")
-            if entities.details:
-                parts.append(f"- 📝 التفاصيل: {entities.details}")
-            if entities.neighborhood:
-                parts.append(f"- 🏘️ الحي: {entities.neighborhood}")
-            parts.append("\nصحيح؟ أكد عشان أبحث لك! 👍")
-            return "\n".join(parts)
-        
-        # إذا ناقصة الخدمة
-        if not entities.service_type and entities.city:
-            return f"أهلاً! 🙋‍♂️\n\nأنت في {entities.city}.\n\n🔧 وش نوع الخدمة اللي تحتاجها؟"
-        
-        # إذا ناقصة المدينة
-        if entities.service_type and not entities.city:
-            return f"أهلاً! 🙋‍♂️\n\n{entities.service_type} - فهمت!\n\n📍 في أي مدينة؟"
-        
-        # لا توجد معلومات
-        return "أهلاً! 🙋‍♂️\n\nكيف أقدر أساعدك؟ أخبرني بنوع الخدمة والمدينة."
-    
-    async def _handle_confirmation(
-        self, 
-        customer_phone: str, 
-        conversation_id: str,
-        entities: ExtractedEntities
-    ) -> Dict[str, Any]:
-        """معالجة التأكيد وبدء البحث"""
-        
-        # إنشاء طلب الخدمة
-        request_result = await supabase_service.create_service_request(
-            conversation_id=conversation_id,
-            customer_phone=customer_phone,
-            service_type=entities.service_type,
-            city=entities.city,
-            details=entities.details,
-            budget=entities.budget
-        )
-        
-        if request_result.get("success"):
-            request_id = request_result.get("request_id")
-            slug = request_result.get("slug")
-            offer_url = f"{APP_URL}/offers/{slug}"
-            
-            reply = f"""✅ *تم استلام طلبك!*
+        # التحقق من التأكيد
+        if self._is_confirming(message):
+            if extracted_data.get("service_type") and extracted_data.get("city"):
+                print("✅ [Agent] Confirmed! Starting search...")
+                
+                # إنشاء طلب
+                request_result = await supabase_service.create_service_request(
+                    conversation_id=conversation_id,
+                    customer_phone=customer_phone,
+                    service_type=extracted_data.get("service_type"),
+                    city=extracted_data.get("city"),
+                    details=extracted_data.get("details"),
+                    budget=extracted_data.get("budget")
+                )
+                
+                if request_result.get("success"):
+                    request_id = request_result.get("request_id")
+                    slug = request_result.get("slug")
+                    offer_url = f"{APP_URL}/offers/{slug}"
+                    
+                    # مسح السياق
+                    if phone_key in CONTEXT_STORE:
+                        del CONTEXT_STORE[phone_key]
+                    
+                    reply = f"""✅ *تم استلام طلبك!*
 
-📋 *الخدمة:* {entities.service_type}
-📍 *المدينة:* {entities.city}
-📝 *التفاصيل:* {entities.details or 'غير محددة'}
+📋 *الخدمة:* {extracted_data.get('service_type')}
+📍 *المدينة:* {extracted_data.get('city')}
+📝 *التفاصيل:* {extracted_data.get('details', 'غير محددة')}
 
 🔍 جاري البحث عن أفضل المزودين...
 
 🔗 *صفحة العروض:*
 {offer_url}
 
-⏰ صلاحية الصفحة: ساعتين
+⏰ صلاحية الصفحة: ساعتين"""
+                    
+                    return {
+                        "reply": reply,
+                        "extracted_data": extracted_data,
+                        "ready_for_matching": True,
+                        "request_id": request_id
+                    }
+        
+        # استخراج معلومات جديدة
+        new_data = self._extract_from_message(message)
+        print(f"📊 [Agent] Extracted: {new_data}")
+        
+        # دمج
+        merged = {**extracted_data, **new_data}
+        print(f"🔄 [Agent] Merged: {merged}")
+        
+        # حفظ في الذاكرة
+        CONTEXT_STORE[phone_key] = {"extracted_data": merged, "stage": "collecting"}
+        
+        # توليد الرد
+        if merged.get("service_type") and merged.get("city"):
+            reply = f"""تمام! ✅
 
-سيصلك تنبيه عند وصول عروض! 📬"""
-            
-            return {
-                "reply": reply,
-                "extracted_data": entities.model_dump(),
-                "ready_for_matching": True,
-                "request_id": request_id
-            }
+- 🔧 الخدمة: {merged['service_type']}
+- 📍 المدينة: {merged['city']}
+{f"- 📝 التفاصيل: {merged['details']}" if merged.get('details') else ''}
+
+صحيح؟ أكد عشان أبحث لك! 👍"""
+        elif merged.get("service_type"):
+            reply = f"أهلاً! 🙋‍♂️ {merged['service_type']} - فهمت!\n\n📍 في أي مدينة؟"
+        elif merged.get("city"):
+            reply = f"أهلاً! 🙋‍♂️\n\nأنت في {merged['city']}.\n\n🔧 وش نوع الخدمة؟"
+        else:
+            reply = "أهلاً! 🙋‍♂️\n\nكيف أقدر أساعدك؟ أخبرني بنوع الخدمة والمدينة."
         
         return {
-            "reply": "عذراً، حدث خطأ في إنشاء الطلب. يرجى المحاولة مرة أخرى.",
-            "extracted_data": entities.model_dump(),
+            "reply": reply,
+            "extracted_data": merged,
             "ready_for_matching": False
         }
 
 
-# إنشاء instance واحد
 reception_agent = ReceptionAgent()
