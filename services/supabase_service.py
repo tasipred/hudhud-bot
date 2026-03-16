@@ -1,17 +1,22 @@
 """
-External API Service
-خدمة الاتصال بالمنصة الخارجية
+Supabase Database Service
+خدمة قاعدة البيانات Supabase
 """
 
 import os
 import httpx
 from typing import Optional, Dict, Any, List
-from config import APP_URL
+from datetime import datetime
+
+# Hardcoded credentials for Railway (no env vars available)
+SUPABASE_URL = os.getenv("SUPABASE_URL", "https://lvgnmmqhfoinsyfowkwy.supabase.co")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imx2Z25tbXFoZm9pbnN5Zm93a3d5Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MzQyNDE5MywiZXhwIjoyMDg5MDAwMTkzfQ.umYlLweTNylI9tPOeYKGn7wDCc1NBU81scEMwX0-_Mk")
 
 
 class SupabaseService:
     """
-    خدمة الاتصال بالمنصة عبر HTTP API
+    خدمة قاعدة البيانات Supabase
+    يستخدم HTTP API مباشرة
     """
 
     # Category slug mapping
@@ -26,9 +31,19 @@ class SupabaseService:
     }
 
     def __init__(self):
-        # Use the Next.js platform API
-        self.platform_url = APP_URL
-        print(f"🌐 [API] Platform URL: {self.platform_url}")
+        self.url = SUPABASE_URL
+        self.key = SUPABASE_KEY
+
+        # HTTP headers
+        self.headers = {
+            "apikey": self.key,
+            "Authorization": f"Bearer {self.key}",
+            "Content-Type": "application/json",
+            "Prefer": "return=representation"
+        }
+
+        print(f"🔑 [Supabase] Initialized with service role key")
+        print(f"🌐 [Supabase] URL: {self.url}")
 
     def _normalize_phone(self, phone: str) -> str:
         """ت normalize رقم الهاتف"""
@@ -43,41 +58,49 @@ class SupabaseService:
         city: str,
         description: Optional[str] = None
     ) -> Dict[str, Any]:
-        """إنشاء طلب خدمة جديد عبر Platform API"""
+        """إنشاء طلب خدمة جديد"""
+
+        import uuid
+        request_id = str(uuid.uuid4())
+
+        # Get category slug
+        category_slug = self.CATEGORY_SLUGS.get(service_type)
 
         data = {
+            "id": request_id,
             "customer_phone": self._normalize_phone(customer_phone),
-            "service_type": service_type,
+            "description": description or f"{service_type} في {city}",
+            "category_slug": category_slug,
             "city": city,
-            "description": description
+            "status": "new"
         }
 
-        print(f"📝 [API] Creating request: {data}")
+        print(f"📝 [Supabase] Creating request: {data}")
 
         try:
             async with httpx.AsyncClient() as client:
                 response = await client.post(
-                    f"{self.platform_url}/api/requests",
+                    f"{self.url}/rest/v1/service_requests",
+                    headers=self.headers,
                     json=data,
                     timeout=30.0
                 )
 
-                print(f"📊 [API] Response status: {response.status_code}")
-                print(f"📊 [API] Response: {response.text[:500]}")
+                print(f"📊 [Supabase] Response status: {response.status_code}")
+                print(f"📊 [Supabase] Response: {response.text[:500] if response.text else 'empty'}")
 
                 if response.status_code in [200, 201]:
-                    result = response.json()
-                    print(f"✅ [API] Created request: {result.get('request_id')}")
+                    print(f"✅ [Supabase] Created service request: {request_id}")
                     return {
                         "success": True,
-                        "request_id": result.get("request_id")
+                        "request_id": request_id
                     }
                 else:
-                    print(f"❌ [API] Create failed: {response.status_code}")
+                    print(f"❌ [Supabase] Create failed: {response.status_code} - {response.text}")
                     return {"success": False, "error": response.text}
 
         except Exception as e:
-            print(f"❌ [API] Create request error: {e}")
+            print(f"❌ [Supabase] Create service request error: {e}")
             return {"success": False, "error": str(e)}
 
     async def get_service_request(self, request_id: str) -> Optional[Dict]:
@@ -85,14 +108,15 @@ class SupabaseService:
         try:
             async with httpx.AsyncClient() as client:
                 response = await client.get(
-                    f"{self.platform_url}/api/requests?id={request_id}",
+                    f"{self.url}/rest/v1/service_requests?id=eq.{request_id}&select=*",
+                    headers=self.headers,
                     timeout=10.0
                 )
                 if response.status_code == 200:
-                    result = response.json()
-                    return result.get("request")
+                    data = response.json()
+                    return data[0] if data else None
         except Exception as e:
-            print(f"❌ [API] Get request error: {e}")
+            print(f"❌ [Supabase] Get service request error: {e}")
         return None
 
     async def get_offers_for_request(self, request_id: str) -> List[Dict]:
@@ -100,14 +124,14 @@ class SupabaseService:
         try:
             async with httpx.AsyncClient() as client:
                 response = await client.get(
-                    f"{self.platform_url}/api/offers/{request_id}",
+                    f"{self.url}/rest/v1/provider_offers?request_id=eq.{request_id}&select=*,providers(id,business_name,whatsapp,rating,review_count,total_jobs)",
+                    headers=self.headers,
                     timeout=10.0
                 )
                 if response.status_code == 200:
-                    result = response.json()
-                    return result.get("offers", [])
+                    return response.json()
         except Exception as e:
-            print(f"❌ [API] Get offers error: {e}")
+            print(f"❌ [Supabase] Get offers error: {e}")
         return []
 
 
