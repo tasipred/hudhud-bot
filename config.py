@@ -32,7 +32,7 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 # App Configuration
 # ============================================
 APP_NAME = "Hudhudbot"
-APP_URL = os.getenv("APP_URL", "https://hudhud.sa")
+APP_URL = os.getenv("APP_URL", "https://hudhud-platform-coral.vercel.app")
 OFFER_PAGE_BASE_URL = f"{APP_URL}/offers"
 
 # ============================================
