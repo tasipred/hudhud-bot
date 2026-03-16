@@ -1,18 +1,15 @@
 """
 Hudhudbot - Main Application
-النسخة المبسطة - تعمل بدون DB للسياق
 """
 
 import os
-import time
-from typing import Optional
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import PlainTextResponse, JSONResponse
 import uvicorn
 from twilio.twiml.messaging_response import MessagingResponse
 
 from agents import reception_agent, provider_agent, ranking_agent, notification_agent, manager_agent
-from config import APP_NAME, APP_URL, SUPABASE_URL, SUPABASE_KEY
+from config import APP_NAME, APP_URL
 
 app = FastAPI(title=APP_NAME, version="1.0.0")
 
@@ -60,7 +57,7 @@ async def whatsapp_webhook(request: Request):
 
 @app.get("/")
 async def root():
-    return {"status": "healthy", "service": APP_NAME, "version": "1.0.0"}
+    return {"status": "healthy", "service": APP_NAME, "version": "1.1.0"}
 
 
 @app.get("/health")
@@ -68,44 +65,37 @@ async def health():
     return {"status": "ok"}
 
 
-@app.get("/status")
-async def status():
-    return JSONResponse(content={
-        "status": "healthy",
-        "uptime": "active",
-        "metrics": {"total_requests": 0},
-        "active_alerts": 0
-    })
-
-
-@app.get("/debug/env")
-async def debug_env():
-    """Endpoint لتشخيص البيئة - للتصحيح فقط"""
+@app.get("/debug/supabase")
+async def debug_supabase():
+    """اختبار الاتصال بـ Supabase"""
     from services.supabase_service import supabase_service
+    import httpx
 
-    # Check if Supabase client is available
-    has_client = supabase_service.client is not None
+    result = {
+        "url": supabase_service.url,
+        "key_prefix": supabase_service.key[:20] + "..." if supabase_service.key else "NOT SET",
+        "headers_set": bool(supabase_service.headers),
+    }
 
-    # Check env vars (masked)
-    supabase_url_status = "set" if SUPABASE_URL else "NOT SET"
-    supabase_key_status = "set" if SUPABASE_KEY else "NOT SET"
+    # Test connection
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{supabase_service.url}/rest/v1/categories?select=name&limit=1",
+                headers=supabase_service.headers,
+                timeout=10.0
+            )
+            result["connection_test"] = {
+                "status_code": response.status_code,
+                "success": response.status_code == 200
+            }
+    except Exception as e:
+        result["connection_test"] = {
+            "success": False,
+            "error": str(e)
+        }
 
-    key_type = "unknown"
-    if SUPABASE_KEY:
-        if SUPABASE_KEY.startswith("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imx2Z25tbXFoZm9pbnN5Zm93a3d5Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSI"):
-            key_type = "service_role"
-        else:
-            key_type = "anon"
-
-    return JSONResponse(content={
-        "supabase": {
-            "url": supabase_url_status,
-            "key": supabase_key_status,
-            "key_type": key_type,
-            "client_connected": has_client
-        },
-        "app_url": APP_URL
-    })
+    return JSONResponse(content=result)
 
 
 if __name__ == "__main__":
