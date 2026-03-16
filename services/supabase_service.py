@@ -1,16 +1,18 @@
 """
 Supabase Database Service
-خدمة قاعدة البيانات Supabase
+خدمة قاعدة البيانات Supabase - النسخة المحسنة
 """
 
 import os
 import httpx
 from typing import Optional, Dict, Any, List
-from datetime import datetime
 
-# Hardcoded credentials for Railway (no env vars available)
-SUPABASE_URL = os.getenv("SUPABASE_URL", "https://lvgnmmqhfoinsyfowkwy.supabase.co")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imx2Z25tbXFoZm9pbnN5Zm93a3d5Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MzQyNDE5MywiZXhwIjoyMDg5MDAwMTkzfQ.umYlLweTNylI9tPOeYKGn7wDCc1NBU81scEMwX0-_Mk")
+# Hardcoded credentials for Railway deployment
+SUPABASE_URL = "https://lvgnmmqhfoinsyfowkwy.supabase.co"
+SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imx2Z25tbXFoZm9pbnN5Zm93a3d5Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MzQyNDE5MywiZXhwIjoyMDg5MDAwMTkzfQ.umYlLweTNylI9tPOeYKGn7wDCc1NBU81scEMwX0-_Mk"
+
+# Platform URL for offers page
+PLATFORM_URL = "https://hudhud-platform-coral.vercel.app"
 
 
 class SupabaseService:
@@ -42,8 +44,9 @@ class SupabaseService:
             "Prefer": "return=representation"
         }
 
-        print(f"🔑 [Supabase] Initialized with service role key")
+        print(f"🔑 [Supabase] Service initialized")
         print(f"🌐 [Supabase] URL: {self.url}")
+        print(f"🚀 [Platform] Offers URL: {PLATFORM_URL}/offers")
 
     def _normalize_phone(self, phone: str) -> str:
         """ت normalize رقم الهاتف"""
@@ -93,7 +96,8 @@ class SupabaseService:
                     print(f"✅ [Supabase] Created service request: {request_id}")
                     return {
                         "success": True,
-                        "request_id": request_id
+                        "request_id": request_id,
+                        "offers_url": f"{PLATFORM_URL}/offers/{request_id}"
                     }
                 else:
                     print(f"❌ [Supabase] Create failed: {response.status_code} - {response.text}")

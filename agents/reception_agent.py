@@ -1,43 +1,47 @@
 """
 Reception Agent - وكيل الاستقبال
-يستخرج المعلومات وينشئ طلب في قاعدة البيانات
+يستخرج المعلومات وينشئ طلب في قاعدة البيانات ويرسل رابط العروض
 """
 
 import re
 from typing import Dict, Any, Optional, List
-from services.supabase_service import supabase_service
-from config import APP_URL
+from services.supabase_service import supabase_service, PLATFORM_URL
 
 # In-Memory Context Store (للاحتياط)
 CONTEXT_STORE: Dict[str, Dict] = {}
 
 # كلمات التأكيد
-CONFIRM_WORDS = ["نعم", "صح", "صحيح", "تمام", "اكيد", "ابحث", "ابدأ", "تم", "آبحث", "أبحث", "أيوة"]
+CONFIRM_WORDS = ["نعم", "صح", "صحيح", "تمام", "اكيد", "ابحث", "ابدأ", "تم", "آبحث", "أبحث", "أيوة", "ايوه", "صح"]
 
 # المدن
-KNOWN_CITIES = ["الرياض", "جدة", "مكة", "المدينة", "الدمام", "الخبر", "الطائف", "تبوك", "بريدة", "خميس مشيط", "الهفوف", "حائل", "نجران", "أبها", "جازان", "القصيم", "القطيف", "الأحساء"]
+KNOWN_CITIES = [
+    "الرياض", "جدة", "مكة", "المدينة", "الدمام", "الخبر", "الطائف", 
+    "تبوك", "بريدة", "خميس مشيط", "الهفوف", "حائل", "نجران", "أبها", 
+    "جازان", "القصيم", "القطيف", "الأحساء", "ينبع", "الجبيل"
+]
 
 # الخدمات
 SERVICE_KEYWORDS = {
-    "سباكة": ["سباك", "سباكة", "تسريب", "مويه", "مياه", "حمام", "مطبخ"],
-    "كهرباء": ["كهرب", "كهرباء", "تمديد", "أسلاك", "مفتاح", "فيش"],
-    "تنظيف": ["تنظيف", "نظاف", "تعقيم", "غسيل", "سجاد", "موكيت"],
-    "تكييف": ["تكييف", "مكيف", "تبريد", "فريون", "سبلت"],
-    "نقل عفش": ["نقل", "عفش", "أثاث", "انتقال", "أغراض"],
-    "صباغة": ["صباغ", "صباغة", "دهان", "طلاء", "لون"],
-    "نجارة": ["نجار", "نجارة", "خشب", "أبواب", "مطابخ"]
+    "سباكة": ["سباك", "سباكة", "تسريب", "مويه", "مياه", "حمام", "مطبخ", "خراب", "صرف"],
+    "كهرباء": ["كهرب", "كهرباء", "تمديد", "أسلاك", "مفتاح", "فيش", "أعطال", "إنارة"],
+    "تنظيف": ["تنظيف", "نظاف", "تعقيم", "غسيل", "سجاد", "موكيت", "كنس", "شقق"],
+    "تكييف": ["تكييف", "مكيف", "تبريد", "فريون", "سبلت", "وحدة", "تشغيل"],
+    "نقل عفش": ["نقل", "عفش", "أثاث", "انتقال", "أغراض", "أواني", "شحن"],
+    "صباغة": ["صباغ", "صباغة", "دهان", "طلاء", "لون", "ديكور", "جدران"],
+    "نجارة": ["نجار", "نجارة", "خشب", "أبواب", "مطابخ", "موبيليا", "أرفف"]
 }
 
 
 class ReceptionAgent:
     
     def _normalize_phone(self, phone: str) -> str:
+        """ت normalize رقم الهاتف"""
         return phone.replace(" ", "").replace("+", "").replace("whatsapp:", "")
     
     def _extract_info(self, message: str) -> Dict:
         """استخراج المعلومات من الرسالة"""
         data = {}
-        print(f"🔍 [_extract_info] Analyzing: {message}")
+        print(f"🔍 [_extract_info] Analyzing: '{message}'")
         
         # استخراج الخدمة
         for service, keywords in SERVICE_KEYWORDS.items():
@@ -60,6 +64,8 @@ class ReceptionAgent:
         return data
     
     def _is_confirmed(self, message: str) -> bool:
+        """التحقق من التأكيد"""
+        message = message.strip().lower()
         return any(w in message for w in CONFIRM_WORDS)
     
     async def process_message(
@@ -73,7 +79,8 @@ class ReceptionAgent:
         """معالجة الرسالة"""
         
         phone_key = self._normalize_phone(customer_phone)
-        print(f"🤖 [Agent] Phone: {phone_key}, Message: {message}")
+        print(f"🤖 [Agent] Phone: {phone_key}")
+        print(f"💬 [Agent] Message: '{message}'")
         
         # استرجاع أو إنشاء سياق
         context = CONTEXT_STORE.get(phone_key, {"extracted_data": {}, "stage": "collecting"})
@@ -86,7 +93,7 @@ class ReceptionAgent:
                 print("✅ [Agent] Confirmed with complete data!")
                 
                 # إنشاء طلب في قاعدة البيانات
-                result = await supabase_service.create_service_request(
+                db_result = await supabase_service.create_service_request(
                     customer_phone=customer_phone,
                     service_type=extracted_data.get("service_type"),
                     city=extracted_data.get("city"),
@@ -98,8 +105,8 @@ class ReceptionAgent:
                     del CONTEXT_STORE[phone_key]
                 
                 # إرسال رابط صفحة العروض
-                if result.get("success") and result.get("request_id"):
-                    offers_url = f"{APP_URL}/offers/{result['request_id']}"
+                if db_result.get("success") and db_result.get("request_id"):
+                    offers_url = f"{PLATFORM_URL}/offers/{db_result['request_id']}"
                     print(f"🔗 [Agent] Offers URL: {offers_url}")
                     
                     return {
@@ -115,9 +122,10 @@ class ReceptionAgent:
 سيصلك إشعار عند وصول عروض جديدة! 📬""",
                         "extracted_data": extracted_data,
                         "ready_for_matching": True,
-                        "request_id": result.get("request_id")
+                        "request_id": db_result.get("request_id")
                     }
                 else:
+                    # Fallback if DB fails
                     return {
                         "reply": f"""✅ *تم استلام طلبك!*
 
@@ -132,16 +140,16 @@ class ReceptionAgent:
         
         # استخراج معلومات جديدة
         new_data = self._extract_info(message)
-        print(f"📊 [Agent] Extracted: {new_data}")
+        print(f"📊 [Agent] Newly extracted: {new_data}")
         
-        # دمج
+        # دمج مع البيانات السابقة
         merged = {**extracted_data, **new_data}
-        print(f"🔄 [Agent] Merged: {merged}")
+        print(f"🔄 [Agent] Merged data: {merged}")
         
-        # حفظ
+        # حفظ السياق
         CONTEXT_STORE[phone_key] = {"extracted_data": merged}
         
-        # توليد الرد
+        # توليد الرد المناسب
         if merged.get("service_type") and merged.get("city"):
             reply = f"""تمام! ✅
 
@@ -153,9 +161,9 @@ class ReceptionAgent:
         elif merged.get("service_type"):
             reply = f"أهلاً! 🙋‍♂️ {merged['service_type']} - فهمت!\n\n📍 في أي مدينة؟"
         elif merged.get("city"):
-            reply = f"أهلاً! 🙋‍♂️\n\nأنت في {merged['city']}.\n\n🔧 وش نوع الخدمة؟"
+            reply = f"أهلاً! 🙋‍♂️\n\nأنت في {merged['city']}.\n\n🔧 وش نوع الخدمة اللي تحتاجها؟"
         else:
-            reply = "أهلاً! 🙋‍♂️\n\nكيف أقدر أساعدك؟ أخبرني بنوع الخدمة والمدينة."
+            reply = "أهلاً! 🙋‍♂️\n\nكيف أقدر أساعدك؟ أخبرني بنوع الخدمة والمدينة.\n\nمثال: أحتاج سباك في الرياض"
         
         return {
             "reply": reply,
@@ -164,4 +172,5 @@ class ReceptionAgent:
         }
 
 
+# إنشاء instance
 reception_agent = ReceptionAgent()
