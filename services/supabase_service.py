@@ -223,39 +223,49 @@ class SupabaseService:
     # Service Requests
     # ============================================
     
+    # Category slug mapping
+    CATEGORY_SLUGS = {
+        "سباكة": "plumbing",
+        "كهرباء": "electrical",
+        "تنظيف": "cleaning",
+        "تكييف": "ac",
+        "نقل عفش": "moving",
+        "صباغة": "painting",
+        "نجارة": "maintenance",
+    }
+    
     async def create_service_request(
         self,
-        conversation_id: str,
         customer_phone: str,
         service_type: str,
         city: str,
-        details: Optional[str] = None,
-        budget: Optional[str] = None
+        description: Optional[str] = None
     ) -> Dict[str, Any]:
         """إنشاء طلب خدمة جديد"""
         if not self.client:
-            return {"success": True, "request_id": "mock-req-123", "slug": "mock-slug"}
+            import uuid
+            return {"success": True, "request_id": str(uuid.uuid4()), "slug": "mock-slug"}
         
         try:
             import uuid
-            slug = str(uuid.uuid4())[:8]
+            request_id = str(uuid.uuid4())
+            
+            # Get category slug
+            category_slug = self.CATEGORY_SLUGS.get(service_type)
             
             result = self.client.table("service_requests").insert({
-                "conversation_id": conversation_id,
-                "customer_phone": customer_phone,
-                "service_type": service_type,
+                "id": request_id,
+                "customer_phone": self._normalize_phone(customer_phone),
+                "description": description or f"{service_type} في {city}",
+                "category_slug": category_slug,
                 "city": city,
-                "details": details,
-                "budget": budget,
-                "status": "pending",
-                "offer_page_slug": slug,
-                "expires_at": (datetime.utcnow() + timedelta(hours=2)).isoformat()
+                "status": "new"
             }).execute()
             
+            print(f"✅ [Supabase] Created service request: {request_id}")
             return {
                 "success": True,
-                "request_id": result.data[0]["id"],
-                "slug": slug
+                "request_id": request_id
             }
         except Exception as e:
             print(f"❌ [Supabase] Create service request error: {e}")

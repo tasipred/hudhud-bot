@@ -1,11 +1,14 @@
 """
-Reception Agent - وكيل الاستقبال البسيط
+Reception Agent - وكيل الاستقبال
+يستخرج المعلومات وينشئ طلب في قاعدة البيانات
 """
 
 import re
 from typing import Dict, Any, Optional, List
+from services.supabase_service import supabase_service
+from config import APP_URL
 
-# In-Memory Context Store
+# In-Memory Context Store (للاحتياط)
 CONTEXT_STORE: Dict[str, Dict] = {}
 
 # كلمات التأكيد
@@ -82,23 +85,50 @@ class ReceptionAgent:
             if extracted_data.get("service_type") and extracted_data.get("city"):
                 print("✅ [Agent] Confirmed with complete data!")
                 
+                # إنشاء طلب في قاعدة البيانات
+                result = await supabase_service.create_service_request(
+                    customer_phone=customer_phone,
+                    service_type=extracted_data.get("service_type"),
+                    city=extracted_data.get("city"),
+                    description=extracted_data.get('details')
+                )
+                
                 # مسح السياق
                 if phone_key in CONTEXT_STORE:
                     del CONTEXT_STORE[phone_key]
                 
-                return {
-                    "reply": f"""✅ *تم استلام طلبك!*
+                # إرسال رابط صفحة العروض
+                if result.get("success") and result.get("request_id"):
+                    offers_url = f"{APP_URL}/offers/{result['request_id']}"
+                    print(f"🔗 [Agent] Offers URL: {offers_url}")
+                    
+                    return {
+                        "reply": f"""✅ *تم استلام طلبك!*
 
 📋 *الخدمة:* {extracted_data.get('service_type')}
 📍 *المدينة:* {extracted_data.get('city')}
 {f"📝 *التفاصيل:* {extracted_data.get('details')}" if extracted_data.get('details') else ''}
 
-🔍 جاري البحث عن أفضل المزودين...
+🔗 *صفحة العروض:*
+{offers_url}
 
+سيصلك إشعار عند وصول عروض جديدة! 📬""",
+                        "extracted_data": extracted_data,
+                        "ready_for_matching": True,
+                        "request_id": result.get("request_id")
+                    }
+                else:
+                    return {
+                        "reply": f"""✅ *تم استلام طلبك!*
+
+📋 *الخدمة:* {extracted_data.get('service_type')}
+📍 *المدينة:* {extracted_data.get('city')}
+
+🔍 جاري البحث عن أفضل المزودين...
 سيصلك رابط صفحة العروض قريباً! 📬""",
-                    "extracted_data": extracted_data,
-                    "ready_for_matching": True
-                }
+                        "extracted_data": extracted_data,
+                        "ready_for_matching": True
+                    }
         
         # استخراج معلومات جديدة
         new_data = self._extract_info(message)
