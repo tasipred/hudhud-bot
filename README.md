@@ -5,3 +5,4 @@
 ## Changelog
 - Added Supabase HTTP API integration
 - Added debug endpoints
+
