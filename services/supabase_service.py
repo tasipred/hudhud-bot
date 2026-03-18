@@ -306,7 +306,6 @@ class SupabaseService:
                     headers=self.headers,
                     json={
                         "id": request_id,
-                        "conversation_id": conversation_id,
                         "customer_phone": self._normalize_phone(customer_phone),
                         "description": details or f"{service_type} في {city}",
                         "category_slug": category_slug,
