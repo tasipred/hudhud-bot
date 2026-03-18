@@ -43,19 +43,82 @@ class ConversationState:
 # ============================================
 # استخراج المعلومات من الرسائل
 # ============================================
+
+# استخراج محلي (بدون AI)
+def extract_info_locally(messages: List[Dict]) -> Dict:
+    """
+    استخراج محلي للمعلومات من الرسائل (أسرع وأكثر موثوقية)
+    """
+    # دمج كل رسائل العميل
+    customer_messages = " ".join([
+        m['content'] for m in messages 
+        if m.get('sender') == 'customer' or m.get('direction') == 'inbound'
+    ])
+    
+    result = {
+        "service_type": None,
+        "city": None,
+        "details": None,
+        "budget": None,
+        "is_complete": False
+    }
+    
+    # استخراج الخدمة
+    services = {
+        "سباك": "سباكة", "سباكة": "سباكة", "تسريب": "سباكة",
+        "كهرب": "كهرباء", "كهرباء": "كهرباء",
+        "تنظيف": "تنظيف", "نظاف": "تنظيف",
+        "تكييف": "تكييف", "مكيف": "تكييف",
+        "نقل": "نقل عفش", "عفش": "نقل عفش", "أثاث": "نقل عفش",
+        "صباغ": "صباغة", "دهان": "صباغة",
+        "نجار": "نجارة", "نجارة": "نجارة"
+    }
+    
+    for keyword, service in services.items():
+        if keyword in customer_messages:
+            result["service_type"] = service
+            break
+    
+    # استخراج المدينة
+    cities = ["الرياض", "جدة", "مكة", "المدينة", "الدمام", "الخبر", "الطائف", 
+              "تبوك", "بريدة", "خميس مشيط", "حائل", "نجران", "أبها", "جازان"]
+    
+    for city in cities:
+        if city in customer_messages:
+            result["city"] = city
+            break
+    
+    # استخراج الميزانية
+    import re
+    budget_match = re.search(r'(\d+)\s*(ريال|ر\.س)', customer_messages)
+    if budget_match:
+        result["budget"] = f"{budget_match.group(1)} ريال"
+    
+    # التحقق من الاكتمال
+    if result["service_type"] and result["city"]:
+        result["is_complete"] = True
+        result["details"] = customer_messages
+    
+    return result
+
+
 async def extract_request_info(messages: List[Dict]) -> Dict:
     """
     استخراج معلومات الطلب من سجل المحادثة
     """
-    # بناء نص المحادثة
+    # أولاً نجرب الاستخراج المحلي (أسرع وأكثر موثوقية)
+    local_result = extract_info_locally(messages)
+    if local_result["is_complete"]:
+        return local_result
+    
+    # إذا لم يكتمل، نستخدم AI كـ fallback
     conversation_text = "\n".join([
-        f"{'العميل' if m['sender'] == 'customer' else 'البوت'}: {m['content']}"
-        for m in messages[-10:]  # آخر 10 رسائل
+        f"{'العميل' if m.get('sender') == 'customer' or m.get('direction') == 'inbound' else 'البوت'}: {m['content']}"
+        for m in messages[-10:]
     ])
     
-    # طلب من AI استخراج المعلومات
     extraction_prompt = """
-أنت مساعد ذكي متخصص في استخراج المعلومات من المحادثات.
+أنت مساعد ذكي متخصص في استخراج المعلومات من المحادثات العربية.
 
 من المحادثة التالية، استخرج المعلومات التالية بتنسيق JSON فقط:
 {
@@ -65,6 +128,12 @@ async def extract_request_info(messages: List[Dict]) -> Dict:
     "budget": "الميزانية إن وجدت أو null",
     "is_complete": true/false (هل المعلومات كاملة؟)
 }
+
+⚠️ قواعد مهمة:
+- "نقل عفش" هي الخدمة الأساسية إذا ذكر العميل النقل
+- "تغليف وتفريغ" هي خدمات إضافية لا تغيّر نوع الخدمة
+- إذا ذكرت المدينة مسبقاً، احتفظ بها
+- لا تغيّر نوع الخدمة المذكور سابقاً
 
 أعد JSON فقط بدون أي نص إضافي.
 """
@@ -78,7 +147,6 @@ async def extract_request_info(messages: List[Dict]) -> Dict:
         try:
             import json
             content = result["content"].strip()
-            # إزالة ```json إن وجدت
             if content.startswith("```"):
                 content = content.split("\n", 1)[1]
             if content.endswith("```"):
@@ -88,7 +156,7 @@ async def extract_request_info(messages: List[Dict]) -> Dict:
         except:
             pass
     
-    return {"is_complete": False}
+    return local_result
 
 
 # ============================================
@@ -335,10 +403,28 @@ async def handle_customer_message(
         # جاري جمع المعلومات
         messages = await supabase_service.get_messages(conversation_id)
         
+        # استخراج المعلومات المحلية للسياق
+        local_info = extract_info_locally(messages + [{"sender": "customer", "content": message_body}])
+        
+        # بناء سياق enrich
+        context_enrichment = ""
+        if local_info.get("service_type") or local_info.get("city"):
+            context_enrichment = f"""
+## 📋 المعلومات المستخرجة من المحادثة:
+- نوع الخدمة: {local_info.get('service_type', 'غير محدد بعد')}
+- المدينة: {local_info.get('city', 'غير محددة بعد')}
+- الميزانية: {local_info.get('budget', 'غير محددة')}
+
+⚠️ مهم: استخدم هذه المعلومات ولا تكرر سؤالها. إذا كانت مذكورة، لا تسأل عنها!
+"""
+        
+        # بناء system prompt enriched
+        enriched_prompt = RECEPTION_AGENT_PROMPT + context_enrichment
+        
         # بناء السياق للـ AI
         chat_history = []
         for msg in messages:
-            role = "user" if msg["sender"] == "customer" else "assistant"
+            role = "user" if msg.get("sender") == "customer" or msg.get("direction") == "inbound" else "assistant"
             chat_history.append({"role": role, "content": msg["content"]})
         
         # إضافة الرسالة الحالية
@@ -347,7 +433,7 @@ async def handle_customer_message(
         # إرسال للـ AI
         ai_response = await deepseek_service.chat(
             messages=chat_history,
-            system_prompt=RECEPTION_AGENT_PROMPT
+            system_prompt=enriched_prompt
         )
         
         if ai_response["success"]:

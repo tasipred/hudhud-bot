@@ -10,6 +10,9 @@ from typing import Optional, Dict, Any, List
 from datetime import datetime, timedelta
 from config import SUPABASE_URL, SUPABASE_KEY, APP_URL
 
+# Platform URL for offers pages
+PLATFORM_URL = APP_URL
+
 # Category slug mapping
 CATEGORY_SLUGS = {
     "سباكة": "plumbing",
@@ -75,34 +78,55 @@ class SupabaseService:
         customer_phone: str,
         initial_message: str
     ) -> Dict[str, Any]:
-        """إنشاء محادثة جديدة"""
+        """إنشاء محادثة جديدة أو استرجاع الموجودة"""
         if not self.url:
             return {"success": True, "conversation_id": "mock-conv-123"}
         
+        phone = self._normalize_phone(customer_phone)
+        
         try:
             async with httpx.AsyncClient() as client:
+                # أولاً نبحث عن محادثة موجودة
+                existing = await client.get(
+                    f"{self.url}/rest/v1/conversations?or=(customer_phone.eq.{phone},phone.eq.{phone})&select=*&order=created_at.desc&limit=1",
+                    headers=self.headers,
+                    timeout=10.0
+                )
+                
+                if existing.status_code == 200:
+                    existing_data = existing.json()
+                    if existing_data:
+                        conv = existing_data[0]
+                        # تحديث المحادثة الموجودة
+                        await client.patch(
+                            f"{self.url}/rest/v1/conversations?id=eq.{conv['id']}",
+                            headers=self.headers,
+                            json={"status": "collecting", "context": {}},
+                            timeout=10.0
+                        )
+                        return {"success": True, "conversation_id": conv["id"], "is_new": False}
+                
+                # إنشاء محادثة جديدة
                 response = await client.post(
                     f"{self.url}/rest/v1/conversations",
                     headers=self.headers,
                     json={
-                        "customer_phone": self._normalize_phone(customer_phone),
+                        "customer_phone": phone,
+                        "phone": phone,
+                        "type": "customer",
                         "status": "new",
-                        "context": {
-                            "initial_message": initial_message,
-                            "stage": "collecting"
-                        }
+                        "context": {"initial_message": initial_message, "stage": "collecting"}
                     },
                     timeout=30.0
                 )
                 
+                print(f"📊 [Supabase] Create conversation response: {response.status_code}")
+                
                 if response.status_code in [200, 201]:
                     data = response.json()
-                    return {
-                        "success": True,
-                        "conversation_id": data[0]["id"]
-                    }
+                    return {"success": True, "conversation_id": data[0]["id"], "is_new": True}
                 else:
-                    print(f"❌ [Supabase] Create conversation error: {response.status_code}")
+                    print(f"❌ [Supabase] Create conversation error: {response.status_code} - {response.text}")
                     return {"success": False, "error": response.text}
                     
         except Exception as e:
@@ -139,15 +163,22 @@ class SupabaseService:
         
         try:
             async with httpx.AsyncClient() as client:
+                # نبحث في customer_phone أو phone (للتوافقية)
                 response = await client.get(
-                    f"{self.url}/rest/v1/conversations?customer_phone=eq.{phone}&select=*&order=created_at.desc&limit=1",
+                    f"{self.url}/rest/v1/conversations?or=(customer_phone.eq.{phone},phone.eq.{phone})&select=*&order=created_at.desc&limit=1",
                     headers=self.headers,
                     timeout=10.0
                 )
                 
                 if response.status_code == 200:
                     data = response.json()
-                    return data[0] if data else None
+                    if data:
+                        conv = data[0]
+                        # نتأكد من وجود context
+                        if not conv.get("context"):
+                            conv["context"] = {}
+                        return conv
+                    return None
                     
         except Exception as e:
             print(f"❌ [Supabase] Get conversation by phone error: {e}")
@@ -198,6 +229,9 @@ class SupabaseService:
         if not self.url:
             return True
         
+        # تحويل sender إلى direction للتوافقية
+        direction = "inbound" if sender == "customer" else "outbound"
+        
         try:
             async with httpx.AsyncClient() as client:
                 response = await client.post(
@@ -206,11 +240,15 @@ class SupabaseService:
                     json={
                         "conversation_id": conversation_id,
                         "sender": sender,
+                        "direction": direction,  # للتوافقية
                         "content": content,
-                        "metadata": metadata or {}
+                        "metadata": metadata or {},
+                        "message_type": "text"
                     },
                     timeout=10.0
                 )
+                if response.status_code not in [200, 201]:
+                    print(f"❌ [Supabase] Save message error: {response.status_code} - {response.text}")
                 return response.status_code in [200, 201]
                 
         except Exception as e:
