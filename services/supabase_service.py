@@ -86,9 +86,9 @@ class SupabaseService:
         
         try:
             async with httpx.AsyncClient() as client:
-                # أولاً نبحث عن محادثة موجودة
+                # أولاً نبحث عن محادثة موجودة - استخدام phone فقط
                 existing = await client.get(
-                    f"{self.url}/rest/v1/conversations?or=(customer_phone.eq.{phone},phone.eq.{phone})&select=*&order=created_at.desc&limit=1",
+                    f"{self.url}/rest/v1/conversations?phone=eq.{phone}&select=*&order=created_at.desc&limit=1",
                     headers=self.headers,
                     timeout=10.0
                 )
@@ -101,21 +101,20 @@ class SupabaseService:
                         await client.patch(
                             f"{self.url}/rest/v1/conversations?id=eq.{conv['id']}",
                             headers=self.headers,
-                            json={"status": "collecting", "context": {}},
+                            json={"status": "collecting", "metadata": {}},
                             timeout=10.0
                         )
                         return {"success": True, "conversation_id": conv["id"], "is_new": False}
                 
-                # إنشاء محادثة جديدة
+                # إنشاء محادثة جديدة - استخدام phone و metadata
                 response = await client.post(
                     f"{self.url}/rest/v1/conversations",
                     headers=self.headers,
                     json={
-                        "customer_phone": phone,
                         "phone": phone,
                         "type": "customer",
                         "status": "new",
-                        "context": {"initial_message": initial_message, "stage": "collecting"}
+                        "metadata": {"initial_message": initial_message, "stage": "collecting"}
                     },
                     timeout=30.0
                 )
@@ -163,9 +162,9 @@ class SupabaseService:
         
         try:
             async with httpx.AsyncClient() as client:
-                # نبحث في customer_phone أو phone (للتوافقية)
+                # البحث باستخدام phone
                 response = await client.get(
-                    f"{self.url}/rest/v1/conversations?or=(customer_phone.eq.{phone},phone.eq.{phone})&select=*&order=created_at.desc&limit=1",
+                    f"{self.url}/rest/v1/conversations?phone=eq.{phone}&select=*&order=created_at.desc&limit=1",
                     headers=self.headers,
                     timeout=10.0
                 )
@@ -174,9 +173,9 @@ class SupabaseService:
                     data = response.json()
                     if data:
                         conv = data[0]
-                        # نتأكد من وجود context
+                        # تحويل metadata إلى context للتوافقية مع الكود
                         if not conv.get("context"):
-                            conv["context"] = {}
+                            conv["context"] = conv.get("metadata") or {}
                         return conv
                     return None
                     
@@ -199,7 +198,8 @@ class SupabaseService:
             if status:
                 update_data["status"] = status
             if context:
-                update_data["context"] = context
+                # استخدام metadata بدلاً من context
+                update_data["metadata"] = context
             
             async with httpx.AsyncClient() as client:
                 response = await client.patch(
