@@ -533,19 +533,20 @@ class SupabaseService:
             return None
         
         try:
-            # البحث عن طلبات أُرسلت للمزود ولم يقدم عرضاً عليها
+            # البحث عن طلبات نشطة في service_requests
             async with httpx.AsyncClient() as client:
-                # أولاً نبحث عن الطلبات الجديدة التي تطابق تخصص المزود
                 response = await client.get(
-                    f"{self.url}/rest/v1/provider_requests?provider_id=eq.{provider_id}&status=eq.sent&select=request_id&order=created_at.desc&limit=1",
+                    f"{self.url}/rest/v1/service_requests?status=eq.new&select=id,matched_providers&limit=10",
                     headers=self.headers,
                     timeout=10.0
                 )
                 
                 if response.status_code == 200:
-                    data = response.json()
-                    if data:
-                        return data[0].get("request_id")
+                    requests = response.json()
+                    for req in requests:
+                        matched = req.get("matched_providers") or []
+                        if provider_id in matched:
+                            return req.get("id")
                     
         except Exception as e:
             print(f"❌ [Supabase] Get active request error: {e}")
@@ -556,23 +557,36 @@ class SupabaseService:
         request_id: str,
         provider_id: str
     ) -> bool:
-        """تسجيل أن الطلب أُرسل للمزود"""
+        """تسجيل أن الطلب أُرسل للمزود - تحديث matched_providers"""
         if not self.url:
             return True
         
         try:
+            # الحصول على matched_providers الحالية
             async with httpx.AsyncClient() as client:
-                response = await client.post(
-                    f"{self.url}/rest/v1/provider_requests",
+                get_response = await client.get(
+                    f"{self.url}/rest/v1/service_requests?id=eq.{request_id}&select=matched_providers",
                     headers=self.headers,
-                    json={
-                        "request_id": request_id,
-                        "provider_id": provider_id,
-                        "status": "sent"
-                    },
                     timeout=10.0
                 )
-                return response.status_code in [200, 201]
+                
+                if get_response.status_code == 200:
+                    data = get_response.json()
+                    if data:
+                        current_matched = data[0].get("matched_providers") or []
+                        if provider_id not in current_matched:
+                            current_matched.append(provider_id)
+                            
+                            # تحديث الطلب
+                            update_response = await client.patch(
+                                f"{self.url}/rest/v1/service_requests?id=eq.{request_id}",
+                                headers=self.headers,
+                                json={"matched_providers": current_matched},
+                                timeout=10.0
+                            )
+                            return update_response.status_code in [200, 204]
+                
+                return True
                 
         except Exception as e:
             print(f"❌ [Supabase] Log provider request error: {e}")
