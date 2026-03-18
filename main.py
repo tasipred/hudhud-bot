@@ -270,19 +270,56 @@ async def handle_provider_response(
 ) -> str:
     """
     معالجة رد المزود على طلب عرض
+    
+    التدفق:
+    1. التحقق من تسجيل المزود
+    2. إيجاد الطلب النشط للمزود
+    3. استخراج معلومات العرض
+    4. حفظ العرض في قاعدة البيانات
+    5. إشعار العميل
     """
     print(f"📥 [ProviderResponse] From: {provider_phone}")
     
-    # استخراج معلومات العرض من الرسالة
+    # 1. التحقق من المزود
+    provider = await supabase_service.get_provider_by_phone(provider_phone)
+    
+    if not provider:
+        return "عذراً، رقمك غير مسجل كمزود في المنصة. للتسجيل: https://hudhud-platform-coral.vercel.app/register"
+    
+    provider_id = provider.get("id")
+    provider_name = provider.get("business_name", "مزود")
+    
+    print(f"✅ [ProviderResponse] Provider found: {provider_name}")
+    
+    # 2. إيجاد الطلب النشط
+    active_request = await supabase_service.get_active_request_for_provider(provider_id)
+    
+    if not active_request:
+        print(f"⚠️ [ProviderResponse] No active request for provider")
+        return f"""
+عذراً، لا يوجد طلبات جديدة بانتظار عرضك حالياً.
+
+💡 عندما يصل طلب جديد يطابق تخصصك، ستصلك رسالة فوراً.
+
+شكراً لكونك جزءاً من هدهد! 🦦
+        """.strip()
+    
+    request_id = active_request.get("request_id")
+    customer_phone = active_request.get("customer_phone", "")
+    
+    print(f"📋 [ProviderResponse] Active request: {request_id} | Customer: {customer_phone}")
+    
+    # 3. استخراج معلومات العرض
     extraction_prompt = """
-استخرج معلومات العرض من رسالة المزود بتنسيق JSON:
+استخرج معلومات العرض من رسالة المزود بتنسيق JSON فقط:
 {
     "price": "السعر المقدم (مثل: 500 ريال) أو null",
     "notes": "ملاحظات المزود أو null",
+    "estimated_time": "الوقت المتوقع (مثل: غداً صباحاً) أو null",
     "is_rejection": true/false (هل المزود يرفض الطلب؟)
 }
 
-أعد JSON فقط.
+أعد JSON فقط بدون أي نص إضافي.
 """
     
     result = await deepseek_service.chat(
@@ -303,30 +340,73 @@ async def handle_provider_response(
         
         offer_data = json.loads(content)
         
+        # إذا المزود يرفض
         if offer_data.get("is_rejection"):
             return "شكراً لإعلامنا. سيتم إبلاغك بالطلبات القادمة."
         
         price = offer_data.get("price")
         if not price:
-            return "يرجى تحديد السعر في عرضك."
+            return "يرجى تحديد السعر في عرضك.\n\nمثال:\nالسعر: 500 ريال\nملاحظات: متفرغ غداً"
         
-        # الحصول على بيانات المزود
-        provider = await supabase_service.get_provider_by_phone(provider_phone)
+        # 4. حفظ العرض
+        save_result = await supabase_service.save_provider_offer(
+            request_id=request_id,
+            provider_id=provider_id,
+            price=price,
+            notes=offer_data.get("notes"),
+            estimated_time=offer_data.get("estimated_time")
+        )
         
-        if not provider:
-            return "عذراً، رقمك غير مسجل كمزود في المنصة. للتسجيل: https://hudhud-platform-coral.vercel.app/register"
+        if not save_result.get("success"):
+            print(f"❌ [ProviderResponse] Failed to save offer: {save_result.get('error')}")
+            return "حدث خطأ أثناء حفظ العرض. يرجى المحاولة مرة أخرى."
         
-        # الحصول على الطلب النشط للمزود
-        # للتبسيط، نستخدم طريقة بديلة - البحث عن آخر طلب غير مكتمل
-        # TODO: تحسين هذا لاحقاً
+        print(f"✅ [ProviderResponse] Offer saved: {price}")
         
+        # 5. إشعار العميل
+        offers_url = f"{APP_URL}/offers/{request_id}"
+        
+        # التحقق من عدد العروض
+        request_with_offers = await supabase_service.get_request_with_offers(request_id)
+        offers_count = len(request_with_offers.get("offers", [])) if request_with_offers else 1
+        
+        # إرسال إشعار للعميل
+        customer_notification = f"""
+🎉 *وصل عرض جديد!*
+
+👤 *المزود:* {provider_name}
+⭐ *التقييم:* {provider.get('rating', 'جديد')} ({provider.get('review_count', 0)} تقييم)
+💰 *السعر:* {price}
+
+📝 *ملاحظات:*
+{offer_data.get('notes') or 'لا توجد ملاحظات'}
+
+━━━━━━━━━━━━━━━
+
+📊 *عدد العروض المستلمة:* {offers_count}
+
+🔗 *شوف كل العروض:*
+{offers_url}
+
+💡 يمكنك قبول العرض أو انتظار عروض أخرى!
+        """.strip()
+        
+        # إرسال الإشعار للعميل
+        if customer_phone:
+            twilio_service.send_whatsapp(
+                to_number=f"whatsapp:+{customer_phone}",
+                body=customer_notification
+            )
+            print(f"📤 [ProviderResponse] Customer notified: {customer_phone}")
+        
+        # رد للمزود
         return f"""
-✅ *تم استلام عرضك!*
+✅ *تم استلام عرضك بنجاح!*
 
-💰 السعر: {price}
-📝 الملاحظات: {offer_data.get('notes') or 'لا توجد'}
+💰 *السعر:* {price}
+📝 *الملاحظات:* {offer_data.get('notes') or 'لا توجد'}
 
-سيتم إشعار العميل بعرضك قريباً.
+تم إرسال عرضك للعميل. سيتم إشعارك إذا تم قبول عرضك.
 
 شكراً لاستخدامك هدهد! 🦦
         """.strip()
@@ -335,6 +415,8 @@ async def handle_provider_response(
         return "عذراً، لم أفهم رسالتك. يرجى إرسال العرض بالتنسيق:\n\nالسعر: [مبلغك]\nملاحظات: [إن وجدت]"
     except Exception as e:
         print(f"❌ [ProviderResponse] Error: {e}")
+        import traceback
+        traceback.print_exc()
         return "حدث خطأ تقني. يرجى المحاولة مرة أخرى."
 
 

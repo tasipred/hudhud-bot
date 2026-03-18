@@ -455,6 +455,16 @@ class SupabaseService:
         if not self.url:
             return {"success": True, "offer_id": "mock-offer-123"}
         
+        # استخراج القيمة الرقمية من النص العربي
+        price_decimal = None
+        try:
+            import re
+            numbers = re.findall(r'[\d,]+\.?\d*', price.replace(',', ''))
+            if numbers:
+                price_decimal = float(numbers[0].replace(',', ''))
+        except:
+            pass
+        
         try:
             async with httpx.AsyncClient() as client:
                 response = await client.post(
@@ -463,7 +473,7 @@ class SupabaseService:
                     json={
                         "request_id": request_id,
                         "provider_id": provider_id,
-                        "price": price,
+                        "price": price_decimal,
                         "notes": notes,
                         "estimated_time": estimated_time,
                         "status": "pending"
@@ -478,6 +488,7 @@ class SupabaseService:
                         "offer_id": data[0]["id"]
                     }
                 else:
+                    print(f"❌ [Supabase] Save offer failed: {response.status_code} - {response.text}")
                     return {"success": False, "error": response.text}
                     
         except Exception as e:
@@ -527,8 +538,13 @@ class SupabaseService:
     # Provider Request Tracking
     # ============================================
     
-    async def get_active_request_for_provider(self, provider_id: str) -> Optional[str]:
-        """الحصول على الطلب النشط للمزود"""
+    async def get_active_request_for_provider(self, provider_id: str) -> Optional[Dict]:
+        """
+        الحصول على الطلب النشط للمزود مع تفاصيل كاملة
+        
+        Returns:
+            Dict with request_id, customer_phone, description, city, etc.
+        """
         if not self.url:
             return None
         
@@ -536,7 +552,7 @@ class SupabaseService:
             # البحث عن طلبات نشطة في service_requests
             async with httpx.AsyncClient() as client:
                 response = await client.get(
-                    f"{self.url}/rest/v1/service_requests?status=eq.new&select=id,matched_providers&limit=10",
+                    f"{self.url}/rest/v1/service_requests?status=eq.new&select=*&limit=10",
                     headers=self.headers,
                     timeout=10.0
                 )
@@ -546,7 +562,15 @@ class SupabaseService:
                     for req in requests:
                         matched = req.get("matched_providers") or []
                         if provider_id in matched:
-                            return req.get("id")
+                            # إرجاع الطلب مع معرف المزود
+                            return {
+                                "request_id": req.get("id"),
+                                "customer_phone": req.get("customer_phone"),
+                                "city": req.get("city"),
+                                "category_slug": req.get("category_slug"),
+                                "description": req.get("description"),
+                                **req
+                            }
                     
         except Exception as e:
             print(f"❌ [Supabase] Get active request error: {e}")
@@ -591,6 +615,43 @@ class SupabaseService:
         except Exception as e:
             print(f"❌ [Supabase] Log provider request error: {e}")
             return False
+    
+    async def get_request_with_offers(self, request_id: str) -> Optional[Dict]:
+        """الحصول على الطلب مع جميع عروضه"""
+        if not self.url:
+            return None
+        
+        try:
+            async with httpx.AsyncClient() as client:
+                # الحصول على الطلب
+                response = await client.get(
+                    f"{self.url}/rest/v1/service_requests?id=eq.{request_id}&select=*",
+                    headers=self.headers,
+                    timeout=10.0
+                )
+                
+                if response.status_code == 200:
+                    requests = response.json()
+                    if requests:
+                        request_data = requests[0]
+                        
+                        # الحصول على العروض
+                        offers_response = await client.get(
+                            f"{self.url}/rest/v1/provider_offers?request_id=eq.{request_id}&select=*&order=created_at.asc",
+                            headers=self.headers,
+                            timeout=10.0
+                        )
+                        
+                        if offers_response.status_code == 200:
+                            request_data["offers"] = offers_response.json()
+                        else:
+                            request_data["offers"] = []
+                        
+                        return request_data
+                    
+        except Exception as e:
+            print(f"❌ [Supabase] Get request with offers error: {e}")
+        return None
 
 
 # إنشاء instance واحد
