@@ -489,7 +489,8 @@ async def handle_customer_message(
     )
     
     # حسب الحالة
-    if status == ConversationState.COLLECTING:
+    # new و collecting نفس المرحلة (جمع المعلومات)
+    if status in [ConversationState.NEW, ConversationState.COLLECTING]:
         # جاري جمع المعلومات
         messages = await supabase_service.get_messages(conversation_id)
         
