@@ -384,12 +384,13 @@ class SupabaseService:
             category_slug = None
         
         try:
-            # بناء الاستعلام
+            # بناء الاستعلام - استخدام status=eq.active وليس status=active
             base_url = f"{self.url}/rest/v1/providers?status=eq.active&select=*&order=rating.desc&limit={limit}"
             
-            # إضافة فلتر المدينة
+            # إضافة فلتر المدينة (ilike للبحث الجزئي)
             if city:
-                base_url += f"&city=ilike.%25{city}%25"
+                # تنسيق ilike الصحيح في PostgREST: city=ilike.*النص*
+                base_url += f"&city=ilike.*{city}*"
             
             # إضافة فلتر التصنيف
             if category_slug:
