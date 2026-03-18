@@ -205,7 +205,15 @@ async def search_and_notify_providers(
         
         # تنسيق رقم الهاتف
         if not provider_phone.startswith("whatsapp:"):
-            provider_phone = f"whatsapp:+966{provider_phone.lstrip('0')}"
+            # إذا كان الرقم يبدأ بـ 966، نستخدمه مباشرة
+            if provider_phone.startswith("966"):
+                provider_phone = f"whatsapp:+{provider_phone}"
+            # إذا كان يبدأ بـ 0، نزيله ونضيف 966
+            elif provider_phone.startswith("0"):
+                provider_phone = f"whatsapp:+966{provider_phone.lstrip('0')}"
+            # وإلا نضيف 966
+            else:
+                provider_phone = f"whatsapp:+966{provider_phone}"
         
         # إرسال طلب العرض
         message = f"""
