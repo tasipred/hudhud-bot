@@ -1,49 +1,23 @@
-"""
-Hudhudbot - Main Application
-التطبيق الرئيسي - Webhook + توجيه الرسائل + إرسال للمزودين
-"""
+#!/usr/bin/env python3
+"""Hudhud Bot - Minimal Version"""
 
 import os
-import sys
-
-# Force flush all output
-sys.stdout = sys.stderr
-
-print("="*50, flush=True)
-print("🚀 Hudhud Bot Starting...", flush=True)
-print(f"Python: {sys.version}", flush=True)
-print(f"PORT env: {os.getenv('PORT', 'NOT SET')}", flush=True)
-print("="*50, flush=True)
-
-from typing import Optional, Dict, List
-from fastapi import FastAPI, Request, Response
-from fastapi.responses import PlainTextResponse
 import uvicorn
+from fastapi import FastAPI
 
-# ============================================
-# FastAPI App
-# ============================================
-app = FastAPI(
-    title="Hudhudbot",
-    description="Hudhudbot - منصة الخدمات الذكية",
-    version="2.2.0"
-)
+print("=== HUDHUD BOT STARTING ===", flush=True)
 
+app = FastAPI()
 
 @app.get("/")
-async def root():
-    return {"status": "ok", "message": "Hudhud Bot is running!"}
-
+def root():
+    return {"status": "ok", "bot": "hudhud"}
 
 @app.get("/health")
-async def health():
+def health():
     return {"status": "healthy"}
 
-
-# ============================================
-# Run Server
-# ============================================
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", 8000))
-    print(f"🚀 Starting server on port {port}", flush=True)
+    port = int(os.environ.get("PORT", 8000))
+    print(f"=== Starting on port {port} ===", flush=True)
     uvicorn.run(app, host="0.0.0.0", port=port)
