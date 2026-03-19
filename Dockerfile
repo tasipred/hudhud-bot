@@ -9,5 +9,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY . .
 
-# Run the application
-CMD ["python", "main.py"]
+# Debug: List files
+RUN ls -la
+
+# Run the application with explicit output
+CMD ["python", "-u", "main.py"]
