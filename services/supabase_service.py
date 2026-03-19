@@ -482,10 +482,20 @@ class SupabaseService:
                 request = requests[0]
                 
                 # التحقق من أن الطلب يمكن إلغاؤه
-                if request.get("status") not in ["new", "matched", "processing"]:
+                # يمكن إلغاء الطلبات: new, matched, processing, expired
+                if request.get("status") not in ["new", "matched", "processing", "expired"]:
                     return {
                         "success": False, 
-                        "error": f"Cannot cancel request with status: {request.get('status')}"
+                        "error": f"لا يمكن إلغاء طلب بحالة: {request.get('status')}"
+                    }
+                
+                # إذا كان الطلب expired، نعتبره ملغي تلقائياً
+                if request.get("status") == "expired":
+                    return {
+                        "success": True,
+                        "message": "الطلب منتهي الصلاحية بالفعل",
+                        "request_id": request_id,
+                        "already_expired": True
                     }
                 
                 # تحديث حالة الطلب

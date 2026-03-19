@@ -730,6 +730,16 @@ async def handle_customer_message(
                         context={}
                     )
                     
+                    # إذا كان الطلب منتهي الصلاحية
+                    if cancel_result.get("already_expired"):
+                        return f"""✅ *انتهت صلاحية الطلب*
+
+📋 رقم الطلب: {request_id[:8]}...
+
+💡 يمكنك الآن إنشاء طلب جديد.
+
+كيف أقدر أساعدك؟ 🦦"""
+                    
                     return f"""✅ *تم إلغاء الطلب بنجاح*
 
 📋 رقم الطلب: {request_id[:8]}...
@@ -737,11 +747,14 @@ async def handle_customer_message(
 💡 يمكنك إنشاء طلب جديد في أي وقت.
 شكراً لاستخدامك هدهد! 🦦"""
                 else:
-                    return f"""⚠️ لم أتمكن من إلغاء الطلب.
+                    # حتى لو فشل الإلغاء، نعيد تعيين المحادثة إذا كان الطلب expired
+                    # لكي يستطيع العميل إنشاء طلب جديد
+                    return f"""⚠️ {cancel_result.get('error', 'حدث خطأ')}
 
-{cancel_result.get('error', 'حدث خطأ غير متوقع')}
+💡 أرسل طلبك الجديد وسأعالجه لك.
 
-هل تريد المحاولة مرة أخرى؟"""
+مثال: "احتاج سباك في الرياض"
+"""
             else:
                 # لا يوجد طلب نشط، إعادة تعيين المحادثة
                 await supabase_service.update_conversation(
