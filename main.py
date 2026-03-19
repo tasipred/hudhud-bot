@@ -14,6 +14,7 @@ from twilio.twiml.messaging_response import MessagingResponse
 from services.twilio_service import twilio_service
 from services.deepseek_service import deepseek_service, RECEPTION_AGENT_PROMPT
 from services.supabase_service import supabase_service
+from services.memory_service import memory_service, log_customer_request, get_user_context, get_smart_suggestion
 from config import APP_NAME, APP_URL, MAX_PROVIDERS_PER_REQUEST
 
 # ============================================
@@ -22,8 +23,26 @@ from config import APP_NAME, APP_URL, MAX_PROVIDERS_PER_REQUEST
 app = FastAPI(
     title=APP_NAME,
     description="Hudhudbot - منصة الخدمات الذكية",
-    version="2.0.0"
+    version="2.1.0"
 )
+
+
+# ============================================
+# Startup Event - تهيئة الذاكرة
+# ============================================
+@app.on_event("startup")
+async def startup_event():
+    """تهيئة الخدمات عند بدء التشغيل"""
+    print("🔧 تهيئة الخدمات...")
+    
+    # تهيئة خدمة الذاكرة
+    memory_initialized = await memory_service.initialize()
+    if memory_initialized:
+        print("✅ [Memory] Memory service initialized")
+    else:
+        print("⚠️ [Memory] Memory service not available (tables may not exist)")
+    
+    print("✅ Bot ready!")
 
 
 # ============================================
@@ -433,6 +452,37 @@ async def handle_customer_message(
     """
     print(f"📨 [CustomerHandler] From: {from_number} | Message: {message_body[:50]}...")
     
+    # الحصول على سياق المستخدم من الذاكرة (إذا كانت متاحة)
+    memory_context = await get_user_context(from_number, message_body)
+    user_profile = memory_context.get("user_profile")
+    
+    # الحصول على اقتراح ذكي من بيانات التدريب
+    smart_suggestion = await get_smart_suggestion(message_body)
+    
+    # إذا كان لدى المستخدم تاريخ، نضيفه للسياق
+    memory_context_str = ""
+    if user_profile:
+        print(f"📋 [Memory] Found profile for {from_number}")
+        memory_context_str = f"""
+## 🧠 ذاكرة المستخدم:
+- المدينة المفضلة: {user_profile.get('preferred_city', 'غير محددة')}
+- الخدمات السابقة: {', '.join(user_profile.get('most_requested_services', []))}
+- عدد الطلبات: {user_profile.get('request_count', 0)}
+"""
+    
+    # إضافة الاقتراح الذكي إذا وُجد
+    if smart_suggestion:
+        print(f"💡 [Memory] Smart suggestion: {smart_suggestion.get('suggested_service')} in {smart_suggestion.get('suggested_city')}")
+        memory_context_str += f"""
+## 💡 اقتراح ذكي من الذاكرة:
+- الخدمة المتوقعة: {smart_suggestion.get('suggested_service', 'غير محدد')}
+- المدينة المتوقعة: {smart_suggestion.get('suggested_city', 'غير محددة')}
+- النمط المطابق: "{smart_suggestion.get('matched_pattern', '')}"
+- الثقة: {int(smart_suggestion.get('confidence', 0) * 100)}%
+
+⚠️ استخدم هذا الاقتراح إذا كان منطقياً ويساعد في فهم الطلب بشكل أسرع.
+"""
+    
     # حالة جديدة - أول رسالة
     if not conversation:
         # إنشاء محادثة جديدة
@@ -498,9 +548,9 @@ async def handle_customer_message(
         local_info = extract_info_locally(messages + [{"sender": "customer", "content": message_body}])
         
         # بناء سياق enrich
-        context_enrichment = ""
+        context_enrichment = memory_context_str
         if local_info.get("service_type") or local_info.get("city"):
-            context_enrichment = f"""
+            context_enrichment += f"""
 ## 📋 المعلومات المستخرجة من المحادثة:
 - نوع الخدمة: {local_info.get('service_type', 'غير محدد بعد')}
 - المدينة: {local_info.get('city', 'غير محددة بعد')}
@@ -552,6 +602,17 @@ async def handle_customer_message(
                         "budget": request_info.get("budget")
                     }
                 )
+            
+            # تسجيل التفاعل في الذاكرة
+            asyncio.create_task(
+                log_customer_request(
+                    phone=from_number,
+                    message=message_body,
+                    service_type=request_info.get("service_type"),
+                    city=request_info.get("city"),
+                    ai_response=reply
+                )
+            )
             
             return reply
     
