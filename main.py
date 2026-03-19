@@ -33,16 +33,23 @@ app = FastAPI(
 @app.on_event("startup")
 async def startup_event():
     """تهيئة الخدمات عند بدء التشغيل"""
-    print("🔧 تهيئة الخدمات...")
-    
-    # تهيئة خدمة الذاكرة
-    memory_initialized = await memory_service.initialize()
-    if memory_initialized:
-        print("✅ [Memory] Memory service initialized")
-    else:
-        print("⚠️ [Memory] Memory service not available (tables may not exist)")
-    
-    print("✅ Bot ready!")
+    try:
+        print("🔧 تهيئة الخدمات...")
+        
+        # تهيئة خدمة الذاكرة (غير حاسمة - يمكن العمل بدونها)
+        try:
+            memory_initialized = await memory_service.initialize()
+            if memory_initialized:
+                print("✅ [Memory] Memory service initialized")
+            else:
+                print("⚠️ [Memory] Memory service not available (tables may not exist)")
+        except Exception as mem_err:
+            print(f"⚠️ [Memory] Initialization skipped: {mem_err}")
+        
+        print("✅ Bot ready!")
+    except Exception as e:
+        print(f"❌ Startup error: {e}")
+        # لا نرمي الخطأ - نريد أن يعمل التطبيق حتى لو فشلت التهيئة
 
 
 # ============================================
