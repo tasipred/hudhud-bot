@@ -834,5 +834,447 @@ class SupabaseService:
         return None
 
 
+    # ============================================
+    # Neighborhoods & Sectors - الأحياء والقطاعات
+    # ============================================
+    
+    async def get_neighborhood_info(self, city: str, neighborhood_name: str) -> Optional[Dict]:
+        """
+        الحصول على معلومات الحي والقطاع
+        
+        Returns:
+            Dict with neighborhood_id, sector_id, sector_code
+        """
+        if not self.url:
+            return None
+        
+        try:
+            async with httpx.AsyncClient() as client:
+                # البحث عن الحي
+                response = await client.get(
+                    f"{self.url}/rest/v1/neighborhoods?"
+                    f"city=ilike.*{city}*&"
+                    f"name=ilike.*{neighborhood_name}*&"
+                    f"select=id,name,city,sector_id,sectors(id,sector_code,sector_name)",
+                    headers=self.headers,
+                    timeout=10.0
+                )
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    if data:
+                        return data[0]
+                    return None
+                    
+        except Exception as e:
+            print(f"❌ [Supabase] Get neighborhood error: {e}")
+        return None
+    
+    async def find_matching_neighborhood(self, city: str, text: str) -> Optional[Dict]:
+        """
+        البحث عن حي مطابق من نص
+        
+        Args:
+            city: المدينة
+            text: النص الذي قد يحتوي على اسم الحي
+        
+        Returns:
+            Dict with neighborhood info
+        """
+        if not self.url:
+            return None
+        
+        try:
+            async with httpx.AsyncClient() as client:
+                # جلب كل أحياء المدينة
+                response = await client.get(
+                    f"{self.url}/rest/v1/neighborhoods?"
+                    f"city=ilike.*{city}*&"
+                    f"select=id,name,sector_id,sectors(id,sector_code)",
+                    headers=self.headers,
+                    timeout=10.0
+                )
+                
+                if response.status_code == 200:
+                    neighborhoods = response.json()
+                    
+                    # البحث في النص
+                    text_lower = text.lower()
+                    for nb in neighborhoods:
+                        if nb['name'] in text or nb['name'].lower() in text_lower:
+                            return nb
+                    
+                    # البحث الجزئي
+                    for nb in neighborhoods:
+                        # البحث عن أي جزء من اسم الحي
+                        name_parts = nb['name'].split()
+                        for part in name_parts:
+                            if len(part) > 2 and part in text:
+                                return nb
+                    
+                    return None
+                    
+        except Exception as e:
+            print(f"❌ [Supabase] Find neighborhood error: {e}")
+        return None
+    
+    async def get_providers_in_sector(
+        self,
+        sector_id: str,
+        category_slug: str,
+        limit: int = 7
+    ) -> List[Dict]:
+        """
+        الحصول على مزودين في قطاع معين
+        """
+        if not self.url:
+            return []
+        
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    f"{self.url}/rest/v1/providers?"
+                    f"sector_id=eq.{sector_id}&"
+                    f"category_slug=eq.{category_slug}&"
+                    f"status=eq.active&"
+                    f"select=*&order=rating.desc&limit={limit}",
+                    headers=self.headers,
+                    timeout=15.0
+                )
+                
+                if response.status_code == 200:
+                    return response.json()
+                    
+        except Exception as e:
+            print(f"❌ [Supabase] Get providers in sector error: {e}")
+        return []
+    
+    async def get_providers_in_nearby_sectors(
+        self,
+        sector_code: str,
+        category_slug: str,
+        limit: int = 5
+    ) -> List[Dict]:
+        """
+        الحصول على مزودين في القطاعات المجاورة (نفس المدينة)
+        
+        Args:
+            sector_code: كود القطاع (مثل: RYD-N)
+            category_slug: تصنيف الخدمة
+            limit: العدد الأقصى
+        """
+        if not self.url:
+            return []
+        
+        try:
+            # استخراج المدينة من الكود
+            city_code = sector_code.split('-')[0]
+            city_map = {
+                'RYD': 'الرياض',
+                'JED': 'جدة',
+                'DMM': 'الدمام',
+                'MKA': 'مكة',
+                'MED': 'المدينة'
+            }
+            city = city_map.get(city_code)
+            
+            if not city:
+                return []
+            
+            async with httpx.AsyncClient() as client:
+                # البحث في نفس المدينة لكن قطاع مختلف
+                response = await client.get(
+                    f"{self.url}/rest/v1/providers?"
+                    f"city=ilike.*{city}*&"
+                    f"category_slug=eq.{category_slug}&"
+                    f"status=eq.active&"
+                    f"select=*&order=rating.desc&limit={limit}",
+                    headers=self.headers,
+                    timeout=15.0
+                )
+                
+                if response.status_code == 200:
+                    providers = response.json()
+                    # استبعاد مزودي نفس القطاع (تم البحث عنهم سابقاً)
+                    return [p for p in providers if p.get('sector_id') != sector_code][:limit]
+                    
+        except Exception as e:
+            print(f"❌ [Supabase] Get nearby providers error: {e}")
+        return []
+
+    # ============================================
+    # Provider Offer Links - روابط المزودين
+    # ============================================
+    
+    async def create_provider_offer_links(
+        self,
+        request_id: str,
+        provider_ids: List[str],
+        expiry_hours: int = 2
+    ) -> List[Dict]:
+        """
+        إنشاء روابط فريدة لكل مزود
+        
+        Args:
+            request_id: معرف الطلب
+            provider_ids: قائمة معرفات المزودين
+            expiry_hours: ساعات انتهاء الصلاحية
+        
+        Returns:
+            List of dicts with provider_id, token, link_url
+        """
+        if not self.url:
+            # إرجاع روابط وهمية
+            return [
+                {
+                    "provider_id": pid,
+                    "token": f"mock-token-{pid[:8]}",
+                    "link_url": f"{APP_URL}/provider-offer/mock-token-{pid[:8]}"
+                }
+                for pid in provider_ids
+            ]
+        
+        import secrets
+        
+        results = []
+        
+        try:
+            async with httpx.AsyncClient() as client:
+                for provider_id in provider_ids:
+                    # توليد توكن فريد
+                    token = secrets.token_hex(32)
+                    expires_at = (datetime.now() + timedelta(hours=expiry_hours)).isoformat()
+                    
+                    # إنشاء الرابط
+                    response = await client.post(
+                        f"{self.url}/rest/v1/provider_offer_links",
+                        headers=self.headers,
+                        json={
+                            "request_id": request_id,
+                            "provider_id": provider_id,
+                            "unique_token": token,
+                            "expires_at": expires_at,
+                            "status": "pending"
+                        },
+                        timeout=10.0
+                    )
+                    
+                    if response.status_code in [200, 201]:
+                        results.append({
+                            "provider_id": provider_id,
+                            "token": token,
+                            "link_url": f"{APP_URL}/provider-offer/{token}"
+                        })
+                    else:
+                        print(f"❌ [Supabase] Create link failed for {provider_id}: {response.text}")
+                    
+            return results
+                    
+        except Exception as e:
+            print(f"❌ [Supabase] Create offer links error: {e}")
+            return results
+    
+    async def get_provider_offer_link(self, token: str) -> Optional[Dict]:
+        """
+        الحصول على معلومات رابط المزود
+        """
+        if not self.url:
+            return None
+        
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    f"{self.url}/rest/v1/provider_offer_links?"
+                    f"unique_token=eq.{token}&"
+                    f"select=*",
+                    headers=self.headers,
+                    timeout=10.0
+                )
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    return data[0] if data else None
+                    
+        except Exception as e:
+            print(f"❌ [Supabase] Get offer link error: {e}")
+        return None
+    
+    async def get_active_links_for_request(self, request_id: str) -> List[Dict]:
+        """
+        الحصول على الروابط النشطة لطلب معين
+        """
+        if not self.url:
+            return []
+        
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    f"{self.url}/rest/v1/provider_offer_links?"
+                    f"request_id=eq.{request_id}&"
+                    f"status=in.(pending,viewed)&"
+                    f"select=*",
+                    headers=self.headers,
+                    timeout=10.0
+                )
+                
+                if response.status_code == 200:
+                    return response.json()
+                    
+        except Exception as e:
+            print(f"❌ [Supabase] Get active links error: {e}")
+        return []
+
+    # ============================================
+    # Lifecycle Management - إدارة دورة الحياة
+    # ============================================
+    
+    async def update_request_lifecycle(
+        self,
+        request_id: str,
+        status: str,
+        timeline_event: Optional[str] = None
+    ) -> bool:
+        """
+        تحديث حالة دورة الحياة للطلب
+        
+        Args:
+            request_id: معرف الطلب
+            status: الحالة الجديدة
+            timeline_event: اسم الحدث للتسجيل
+        """
+        if not self.url:
+            return True
+        
+        try:
+            async with httpx.AsyncClient() as client:
+                # الحصول على timeline الحالي
+                get_response = await client.get(
+                    f"{self.url}/rest/v1/service_requests?id=eq.{request_id}&select=status_timeline",
+                    headers=self.headers,
+                    timeout=10.0
+                )
+                
+                timeline = {}
+                if get_response.status_code == 200:
+                    data = get_response.json()
+                    if data:
+                        timeline = data[0].get("status_timeline") or {}
+                
+                # إضافة الحدث الجديد
+                if timeline_event:
+                    timeline[timeline_event] = datetime.now().isoformat()
+                
+                # تحديث الطلب
+                update_data = {
+                    "lifecycle_status": status,
+                    "status_timeline": timeline
+                }
+                
+                # إضافة تاريخ انتهاء الصلاحية إذا لزم
+                if status == "waiting_offers":
+                    # 30 دقيقة لجمع العروض
+                    update_data["expires_at"] = (datetime.now() + timedelta(minutes=30)).isoformat()
+                elif status == "decision_time":
+                    # 60 دقيقة لاتخاذ القرار
+                    update_data["expires_at"] = (datetime.now() + timedelta(hours=1)).isoformat()
+                
+                response = await client.patch(
+                    f"{self.url}/rest/v1/service_requests?id=eq.{request_id}",
+                    headers=self.headers,
+                    json=update_data,
+                    timeout=10.0
+                )
+                
+                return response.status_code in [200, 204]
+                
+        except Exception as e:
+            print(f"❌ [Supabase] Update lifecycle error: {e}")
+            return False
+    
+    async def schedule_notification(
+        self,
+        notification_type: str,
+        target_phone: str,
+        message: str,
+        scheduled_at: datetime,
+        request_id: Optional[str] = None,
+        data: Optional[Dict] = None
+    ) -> bool:
+        """
+        جدولة إشعار للإرسال لاحقاً
+        """
+        if not self.url:
+            return True
+        
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    f"{self.url}/rest/v1/scheduled_notifications",
+                    headers=self.headers,
+                    json={
+                        "notification_type": notification_type,
+                        "target_phone": target_phone,
+                        "message": message,
+                        "scheduled_at": scheduled_at.isoformat(),
+                        "request_id": request_id,
+                        "data": data or {}
+                    },
+                    timeout=10.0
+                )
+                
+                return response.status_code in [200, 201]
+                
+        except Exception as e:
+            print(f"❌ [Supabase] Schedule notification error: {e}")
+            return False
+    
+    async def get_pending_notifications(self) -> List[Dict]:
+        """
+        الحصول على الإشعارات المعلقة للإرسال
+        """
+        if not self.url:
+            return []
+        
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    f"{self.url}/rest/v1/scheduled_notifications?"
+                    f"status=eq.pending&"
+                    f"scheduled_at=lte.{datetime.now().isoformat()}&"
+                    f"select=*",
+                    headers=self.headers,
+                    timeout=10.0
+                )
+                
+                if response.status_code == 200:
+                    return response.json()
+                    
+        except Exception as e:
+            print(f"❌ [Supabase] Get pending notifications error: {e}")
+        return []
+    
+    async def mark_notification_sent(self, notification_id: str) -> bool:
+        """تحديد الإشعار كمُرسل"""
+        if not self.url:
+            return True
+        
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.patch(
+                    f"{self.url}/rest/v1/scheduled_notifications?id=eq.{notification_id}",
+                    headers=self.headers,
+                    json={
+                        "status": "sent",
+                        "sent_at": datetime.now().isoformat()
+                    },
+                    timeout=10.0
+                )
+                return response.status_code in [200, 204]
+                
+        except Exception as e:
+            print(f"❌ [Supabase] Mark notification error: {e}")
+            return False
+
+
 # إنشاء instance واحد
 supabase_service = SupabaseService()

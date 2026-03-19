@@ -189,7 +189,7 @@ async def search_and_notify_providers(
     customer_phone: str
 ) -> Dict:
     """
-    البحث عن مزودين وإرسال طلبات لهم
+    البحث عن مزودين وإرسال طلبات لهم مع روابط فريدة
     """
     print(f"🔍 [ProviderAgent] Searching for: {service_type} in {city}")
     
@@ -211,6 +211,29 @@ async def search_and_notify_providers(
     
     print(f"✅ [ProviderAgent] Found {len(providers)} providers")
     
+    # استخراج معرفات المزودين
+    provider_ids = [p.get("id") for p in providers if p.get("id")]
+    
+    # إنشاء روابط فريدة لكل مزود
+    print(f"🔗 [ProviderAgent] Creating unique links for {len(provider_ids)} providers...")
+    offer_links = await supabase_service.create_provider_offer_links(
+        request_id=request_id,
+        provider_ids=provider_ids,
+        expiry_hours=2
+    )
+    
+    if not offer_links:
+        print(f"⚠️ [ProviderAgent] Failed to create offer links")
+        return {
+            "success": False,
+            "providers_found": len(providers),
+            "providers_contacted": 0,
+            "error": "فشل في إنشاء روابط العروض"
+        }
+    
+    # بناء خريطة الرابط -> المزود
+    link_map = {link["provider_id"]: link for link in offer_links}
+    
     # إرسال طلبات للمزودين
     contacted_count = 0
     
@@ -218,9 +241,18 @@ async def search_and_notify_providers(
         provider_phone = provider.get("whatsapp", "")
         provider_id = provider.get("id")
         provider_name = provider.get("business_name", "مزود")
+        provider_rating = provider.get("rating", "جديد")
         
         if not provider_phone:
             continue
+        
+        # الحصول على رابط المزود
+        provider_link = link_map.get(provider_id)
+        if not provider_link:
+            print(f"⚠️ [ProviderAgent] No link for provider {provider_id}")
+            continue
+        
+        offer_url = provider_link.get("link_url")
         
         # تنسيق رقم الهاتف
         if not provider_phone.startswith("whatsapp:"):
@@ -234,7 +266,7 @@ async def search_and_notify_providers(
             else:
                 provider_phone = f"whatsapp:+966{provider_phone}"
         
-        # إرسال طلب العرض
+        # إرسال طلب العرض مع الرابط
         message = f"""
 🔔 *طلب جديد من هدهد!*
 
@@ -246,17 +278,12 @@ async def search_and_notify_providers(
 
 ━━━━━━━━━━━━━━━
 
-💡 *للتقدم بعرض:*
-رد على هذه الرسالة بالتنسيق التالي:
+🔗 *للتقدم بعرضك، اضغط هنا:*
+{offer_url}
 
-السعر: [مبلغك]
-ملاحظات: [إن وجدت]
+⏰ *الرابط صالح لمدة ساعتين*
 
-مثال:
-السعر: 500 ريال
-ملاحظات: متفرغ غداً صباحاً
-
-⏰ العرض مفتوح لمدة ساعتين
+💡 ملاحظة: رقم العميل محجوب للحفاظ على الخصوصية
         """.strip()
         
         result = twilio_service.send_whatsapp(
@@ -271,12 +298,13 @@ async def search_and_notify_providers(
                 request_id=request_id,
                 provider_id=provider_id
             )
-            print(f"📤 [ProviderAgent] Sent to: {provider_name}")
+            print(f"📤 [ProviderAgent] Sent to: {provider_name} | Link: {offer_url[:50]}...")
     
     return {
         "success": contacted_count > 0,
         "providers_found": len(providers),
-        "providers_contacted": contacted_count
+        "providers_contacted": contacted_count,
+        "offer_links_created": len(offer_links)
     }
 
 
@@ -951,14 +979,97 @@ async def root():
     return {
         "status": "healthy",
         "service": APP_NAME,
-        "version": "2.0.0"
+        "version": "2.2.0"
     }
 
 
 @app.get("/health")
 async def health():
     """فحص صحة الخادم"""
-    return {"status": "ok", "version": "2.1.0"}
+    return {"status": "ok", "version": "2.2.0"}
+
+
+# ============================================
+# Notification Endpoint - للإشعارات من المنصة
+# ============================================
+@app.post("/api/notify-new-offer")
+async def notify_new_offer(request: Request):
+    """
+    استقبال إشعار من المنصة عند تقديم عرض جديد
+    يُستدعى من صفحة المزود (provider-offer)
+    """
+    try:
+        body = await request.json()
+        
+        customer_phone = body.get("customer_phone")
+        request_id = body.get("request_id")
+        offer_id = body.get("offer_id")
+        price = body.get("price")
+        
+        print(f"📩 [Notify] New offer notification:")
+        print(f"   Request: {request_id}")
+        print(f"   Customer: {customer_phone}")
+        print(f"   Price: {price}")
+        
+        if not customer_phone or not request_id:
+            return {"success": False, "error": "Missing required fields"}
+        
+        # الحصول على معلومات العرض والمزود
+        offers = await supabase_service.get_offers_for_request(request_id)
+        
+        # العرض الجديد
+        new_offer = None
+        for offer in offers:
+            if offer.get("id") == offer_id:
+                new_offer = offer
+                break
+        
+        if not new_offer:
+            # نأخذ آخر عرض
+            new_offer = offers[-1] if offers else None
+        
+        if new_offer:
+            provider_info = new_offer.get("providers", {})
+            provider_name = provider_info.get("business_name", "مزود") if provider_info else "مزود"
+            provider_rating = provider_info.get("rating", "جديد") if provider_info else "جديد"
+            
+            # إرسال إشعار للعميل
+            offers_url = f"{APP_URL}/offers/{request_id}"
+            
+            notification_message = f"""
+🎉 *وصل عرض جديد!*
+
+👤 *المزود:* {provider_name}
+⭐ *التقييم:* {provider_rating}
+💰 *السعر:* {price} ريال
+
+━━━━━━━━━━━━━━━
+
+📊 *عدد العروض المستلمة:* {len(offers)}
+
+🔗 *شوف كل العروض:*
+{offers_url}
+
+💡 يمكنك قبول العرض أو انتظار عروض أخرى!
+            """.strip()
+            
+            # إرسال الإشعار
+            twilio_service.send_whatsapp(
+                to_number=f"whatsapp:+{customer_phone}",
+                body=notification_message
+            )
+            
+            print(f"✅ [Notify] Customer notified: {customer_phone}")
+            
+            return {"success": True, "notified": True}
+        
+        return {"success": True, "notified": False, "reason": "Offer not found"}
+        
+    except Exception as e:
+        print(f"❌ [Notify] Error: {e}")
+        import traceback
+        traceback.print_exc()
+        return {"success": False, "error": str(e)}
 
 
 # ============================================
