@@ -710,6 +710,102 @@ async def handle_customer_message(
     
     elif status == ConversationState.WAITING:
         # العميل ينتظر العروض
+        
+        # التحقق من إلغاء الطلب
+        cancel_keywords = ["الغاء", "إلغاء", "الغي", "إلغ", "كانسل", "لا أريد", "لا اريد", "مابي", "ما أبي"]
+        is_cancel_request = any(keyword in message_body.lower() for keyword in cancel_keywords)
+        
+        if is_cancel_request:
+            # إلغاء الطلب
+            request_id = context.get("request_id")
+            
+            if request_id:
+                cancel_result = await supabase_service.cancel_service_request(request_id, from_number)
+                
+                if cancel_result.get("success"):
+                    # إعادة تعيين المحادثة
+                    await supabase_service.update_conversation(
+                        conversation_id=conversation_id,
+                        status=ConversationState.NEW,
+                        context={}
+                    )
+                    
+                    return f"""✅ *تم إلغاء الطلب بنجاح*
+
+📋 رقم الطلب: {request_id[:8]}...
+
+💡 يمكنك إنشاء طلب جديد في أي وقت.
+شكراً لاستخدامك هدهد! 🦦"""
+                else:
+                    return f"""⚠️ لم أتمكن من إلغاء الطلب.
+
+{cancel_result.get('error', 'حدث خطأ غير متوقع')}
+
+هل تريد المحاولة مرة أخرى؟"""
+            else:
+                # لا يوجد طلب نشط، إعادة تعيين المحادثة
+                await supabase_service.update_conversation(
+                    conversation_id=conversation_id,
+                    status=ConversationState.NEW,
+                    context={}
+                )
+                return "✅ تم إلغاء الطلب. كيف أقدر أساعدك؟"
+        
+        # التحقق من طلب جديد
+        # إذا كانت الرسالة تحتوي على كلمات طلب خدمة، نتحقق من صلاحية الطلب الحالي
+        service_keywords = ["سباك", "كهرب", "تكييف", "تنظيف", "نقل", "صباغ", "نجار", "احتاج", "ابي", "مطلوب"]
+        is_service_request = any(keyword in message_body.lower() for keyword in service_keywords)
+        
+        if is_service_request:
+            # التحقق من صلاحية الطلب الحالي
+            active_request = await supabase_service.get_active_request_for_customer(from_number)
+            
+            if not active_request:
+                # الطلب الحالي منتهي أو غير موجود، يمكن إنشاء طلب جديد
+                await supabase_service.update_conversation(
+                    conversation_id=conversation_id,
+                    status=ConversationState.COLLECTING,
+                    context={}
+                )
+                # معالجة الرسالة الجديدة - استخراج المعلومات مباشرة
+                local_info = extract_info_locally([{"sender": "customer", "content": message_body}])
+                
+                # بناء رد ذكي
+                if local_info.get("service_type") and local_info.get("city"):
+                    return f"""📝 *فهمت طلبك الجديد!*
+
+🔧 الخدمة: {local_info.get('service_type')}
+📍 المدينة: {local_info.get('city')}
+
+هل المعلومات صحيحة؟ أجب بـ "نعم" للتأكيد أو أخبرني بالتعديل."""
+                else:
+                    service = local_info.get("service_type", "غير محدد")
+                    city = local_info.get("city")
+                    
+                    city_line = f"📍 المدينة: {city}" if city else "📍 في أي مدينة تحتاج الخدمة؟"
+                    help_line = "💡 أخبرني بالمدينة لأكمل طلبك" if not city else "هل هذه المعلومات صحيحة؟"
+                    
+                    return f"""📝 *طلب جديد*
+
+🔧 الخدمة: {service if service != "غير محدد" else "لم أحددها بعد"}
+
+{city_line}
+{help_line}"""
+            else:
+                # يوجد طلب نشط
+                offers_url = context.get("offer_page_url", f"{APP_URL}/offers/{active_request.get('id')}")
+                return f"""⚠️ *لديك طلب نشط بالفعل!*
+
+📋 رقم الطلب: {active_request.get('id', '')[:8]}...
+📊 عدد العروض: {active_request.get('offers_count', 0)}
+
+🔗 *صفحة العروض:*
+{offers_url}
+
+💡 إذا تريد إلغاء الطلب الحالي، أرسل: "إلغاء الطلب"
+"""
+        
+        # رد افتراضي
         offers_url = context.get("offer_page_url", f"{APP_URL}/offers")
         return f"""⏳ *جاري انتظار العروض...*
 
@@ -718,7 +814,8 @@ async def handle_customer_message(
 
 📊 الصفحة تتحدث تلقائياً عند وصول عروض جديدة!
 
-هل تحتاج مساعدة أخرى؟"""
+💡 إذا تريد إلغاء الطلب، أرسل: "إلغاء الطلب"
+"""
     
     # رد افتراضي
     return "شكراً لرسالتك! فريق هدهد يهتم بخدمتك. كيف أقدر أساعدك؟"

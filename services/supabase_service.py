@@ -449,6 +449,79 @@ class SupabaseService:
             print(f"❌ [Supabase] Expire requests error: {e}")
             return 0
     
+    async def cancel_service_request(self, request_id: str, customer_phone: str = None) -> Dict[str, Any]:
+        """
+        إلغاء طلب خدمة
+        
+        Args:
+            request_id: معرف الطلب
+            customer_phone: رقم هاتف العميل (للتحقق)
+        
+        Returns:
+            Dict with success status
+        """
+        if not self.url:
+            return {"success": True, "message": "Request cancelled (mock)"}
+        
+        try:
+            async with httpx.AsyncClient() as client:
+                # التحقق من الطلب أولاً
+                check_response = await client.get(
+                    f"{self.url}/rest/v1/service_requests?id=eq.{request_id}&select=*",
+                    headers=self.headers,
+                    timeout=10.0
+                )
+                
+                if check_response.status_code != 200:
+                    return {"success": False, "error": "Request not found"}
+                
+                requests = check_response.json()
+                if not requests:
+                    return {"success": False, "error": "Request not found"}
+                
+                request = requests[0]
+                
+                # التحقق من أن الطلب يمكن إلغاؤه
+                if request.get("status") not in ["new", "matched", "processing"]:
+                    return {
+                        "success": False, 
+                        "error": f"Cannot cancel request with status: {request.get('status')}"
+                    }
+                
+                # تحديث حالة الطلب
+                update_response = await client.patch(
+                    f"{self.url}/rest/v1/service_requests?id=eq.{request_id}",
+                    headers=self.headers,
+                    json={
+                        "status": "cancelled",
+                        "notes": "Cancelled by customer via WhatsApp"
+                    },
+                    timeout=10.0
+                )
+                
+                if update_response.status_code in [200, 204]:
+                    print(f"✅ [Supabase] Request {request_id} cancelled")
+                    return {
+                        "success": True,
+                        "message": "Request cancelled successfully",
+                        "request_id": request_id
+                    }
+                else:
+                    return {"success": False, "error": update_response.text}
+                    
+        except Exception as e:
+            print(f"❌ [Supabase] Cancel request error: {e}")
+            return {"success": False, "error": str(e)}
+    
+    async def get_customer_active_request_id(self, customer_phone: str) -> Optional[str]:
+        """
+        الحصول على معرف الطلب النشط للعميل
+        """
+        active = await self.get_active_request_for_customer(customer_phone)
+        if active:
+            return active.get("id")
+        return None
+    
     # ============================================
     # Providers - المزودين
     # ============================================
