@@ -352,6 +352,103 @@ class SupabaseService:
             print(f"❌ [Supabase] Get service request error: {e}")
         return None
     
+    async def get_active_request_for_customer(self, customer_phone: str) -> Optional[Dict]:
+        """
+        الحصول على الطلب النشط للعميل (غير منتهي الصلاحية)
+        يرجع None إذا لم يكن هناك طلب نشط
+        """
+        if not self.url:
+            return None
+        
+        phone = self._normalize_phone(customer_phone)
+        
+        try:
+            async with httpx.AsyncClient() as client:
+                # البحث عن طلبات نشطة (new أو matched) وغير منتهية
+                response = await client.get(
+                    f"{self.url}/rest/v1/service_requests?"
+                    f"customer_phone=eq.{phone}&"
+                    f"status=in.(new,matched,processing)&"
+                    f"select=*&order=created_at.desc&limit=1",
+                    headers=self.headers,
+                    timeout=10.0
+                )
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    if data:
+                        request = data[0]
+                        # التحقق من انتهاء الصلاحية
+                        expires_at = request.get('expires_at')
+                        if expires_at:
+                            from datetime import datetime
+                            expiry_time = datetime.fromisoformat(expires_at.replace('Z', '+00:00'))
+                            if datetime.now(expiry_time.tzinfo) > expiry_time:
+                                # الطلب منتهي الصلاحية
+                                print(f"⏰ [Supabase] Request {request['id']} has expired")
+                                # تحديث الحالة
+                                await client.patch(
+                                    f"{self.url}/rest/v1/service_requests?id=eq.{request['id']}",
+                                    headers=self.headers,
+                                    json={"status": "expired"},
+                                    timeout=10.0
+                                )
+                                return None
+                        return request
+                    return None
+                    
+        except Exception as e:
+            print(f"❌ [Supabase] Get active request error: {e}")
+        return None
+    
+    async def can_create_new_request(self, customer_phone: str) -> Dict[str, Any]:
+        """
+        التحقق مما إذا كان العميل يمكنه إنشاء طلب جديد
+        """
+        active_request = await self.get_active_request_for_customer(customer_phone)
+        
+        if active_request:
+            return {
+                "can_create": False,
+                "reason": "has_active_request",
+                "active_request_id": active_request.get("id"),
+                "active_request_status": active_request.get("status"),
+                "expires_at": active_request.get("expires_at"),
+                "offers_count": active_request.get("offers_count", 0),
+                "message": f"لديك طلب نشط بالفعل. انتظر انتهاء صلاحيته أو راجع العروض."
+            }
+        
+        return {
+            "can_create": True,
+            "reason": None
+        }
+    
+    async def expire_old_requests(self) -> int:
+        """
+        تحديث جميع الطلبات منتهية الصلاحية
+        """
+        if not self.url:
+            return 0
+        
+        try:
+            async with httpx.AsyncClient() as client:
+                # استدعاء الـ function
+                response = await client.post(
+                    f"{self.url}/rest/v1/rpc/expire_old_requests",
+                    headers=self.headers,
+                    json={},
+                    timeout=30.0
+                )
+                
+                if response.status_code == 200:
+                    print("✅ [Supabase] Expired old requests")
+                    return 1
+                return 0
+                
+        except Exception as e:
+            print(f"❌ [Supabase] Expire requests error: {e}")
+            return 0
+    
     # ============================================
     # Providers - المزودين
     # ============================================

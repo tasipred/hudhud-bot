@@ -620,6 +620,28 @@ async def handle_customer_message(
         # العميل يؤكد المعلومات
         if any(word in message_body.lower() for word in ["نعم", "صح", "صحيح", "أيوة", "تمام", "أكد", "ابدأ", "ابحث"]):
             # العميل أكد - ننتقل للبحث
+            
+            # ⚠️ التحقق من وجود طلب نشط أولاً
+            can_create = await supabase_service.can_create_new_request(from_number)
+            
+            if not can_create.get("can_create"):
+                # يوجد طلب نشط بالفعل
+                active_request_id = can_create.get("active_request_id")
+                expires_at = can_create.get("expires_at")
+                offers_count = can_create.get("offers_count", 0)
+                
+                return f"""⚠️ *لديك طلب نشط بالفعل!*
+
+📋 *رقم الطلب:* {active_request_id[:8] if active_request_id else 'غير متاح'}
+📊 *عدد العروض:* {offers_count}
+⏰ *ينتهي في:* {expires_at[:16] if expires_at else 'غير محدد'}
+
+🔗 *صفحة العروض:*
+{APP_URL}/offers/{active_request_id}
+
+💡 يجب أن تنتهي صلاحية الطلب الحالي أو إغلاقه قبل إنشاء طلب جديد.
+"""
+            
             await supabase_service.update_conversation(
                 conversation_id=conversation_id,
                 status=ConversationState.SEARCHING
@@ -826,7 +848,74 @@ async def root():
 @app.get("/health")
 async def health():
     """فحص صحة الخادم"""
-    return {"status": "ok", "version": "2.0.0"}
+    return {"status": "ok", "version": "2.1.0"}
+
+
+# ============================================
+# Cron Jobs - المهام الدورية
+# ============================================
+@app.post("/cron/expire-requests")
+async def cron_expire_requests(request: Request):
+    """
+    تحديث الطلبات منتهية الصلاحية
+    يستدعى كل 5 دقائق من Railway Cron
+    """
+    # التحقق من Authorization (optional security)
+    auth_header = request.headers.get("Authorization", "")
+    cron_secret = os.getenv("CRON_SECRET", "")
+    
+    if cron_secret and auth_header != f"Bearer {cron_secret}":
+        return {"status": "unauthorized", "message": "Invalid secret"}
+    
+    try:
+        # استدعاء function في Supabase
+        result = await supabase_service.expire_old_requests()
+        
+        return {
+            "status": "success",
+            "message": "Expired old requests",
+            "result": result
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": str(e)
+        }
+
+
+@app.get("/debug/requests")
+async def debug_requests():
+    """عرض حالة الطلبات"""
+    import httpx
+    
+    try:
+        async with httpx.AsyncClient() as client:
+            # الحصول على إحصائيات الطلبات
+            response = await client.get(
+                f"{supabase_service.url}/rest/v1/service_requests?select=status,expires_at,created_at&order=created_at.desc&limit=20",
+                headers=supabase_service.headers,
+                timeout=10.0
+            )
+            
+            if response.status_code == 200:
+                requests = response.json()
+                
+                # حساب الإحصائيات
+                stats = {}
+                for req in requests:
+                    status = req.get("status", "unknown")
+                    stats[status] = stats.get(status, 0) + 1
+                
+                return {
+                    "total": len(requests),
+                    "stats": stats,
+                    "recent": requests[:5]
+                }
+            else:
+                return {"error": response.status_code}
+                
+    except Exception as e:
+        return {"error": str(e)}
 
 
 # ============================================
