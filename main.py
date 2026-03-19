@@ -3,6 +3,11 @@ Hudhudbot - Main Application
 التطبيق الرئيسي - Webhook + توجيه الرسائل + إرسال للمزودين
 """
 
+# Debug: Print before any imports
+print("="*50)
+print("🚀 Hudhud Bot Starting...")
+print("="*50)
+
 import os
 import asyncio
 from typing import Optional, Dict, List
