@@ -9,8 +9,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY . .
 
-# Debug: List files
-RUN ls -la
+# Make start script executable
+RUN chmod +x start.sh
 
-# Run the application with explicit output
-CMD ["python", "-u", "main.py"]
+# Run via start script
+CMD ["./start.sh"]
