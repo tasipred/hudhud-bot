@@ -271,28 +271,8 @@ async def search_and_notify_providers(
     
     print(f"✅ [ProviderAgent] Found {len(providers)} providers")
     
-    # استخراج معرفات المزودين
-    provider_ids = [p.get("id") for p in providers if p.get("id")]
-    
-    # إنشاء روابط فريدة لكل مزود
-    print(f"🔗 [ProviderAgent] Creating unique links for {len(provider_ids)} providers...")
-    offer_links = await supabase_service.create_provider_offer_links(
-        request_id=request_id,
-        provider_ids=provider_ids,
-        expiry_hours=2
-    )
-    
-    if not offer_links:
-        print(f"⚠️ [ProviderAgent] Failed to create offer links")
-        return {
-            "success": False,
-            "providers_found": len(providers),
-            "providers_contacted": 0,
-            "error": "فشل في إنشاء روابط العروض"
-        }
-    
-    # بناء خريطة الرابط -> المزود
-    link_map = {link["provider_id"]: link for link in offer_links}
+    # رابط العروض العام (نفس الرابط لكل المزودين)
+    offer_url = f"{APP_URL}/offers/{request_id}"
     
     # إرسال طلبات للمزودين
     contacted_count = 0
@@ -305,14 +285,6 @@ async def search_and_notify_providers(
         
         if not provider_phone:
             continue
-        
-        # الحصول على رابط المزود
-        provider_link = link_map.get(provider_id)
-        if not provider_link:
-            print(f"⚠️ [ProviderAgent] No link for provider {provider_id}")
-            continue
-        
-        offer_url = provider_link.get("link_url")
         
         # تنسيق رقم الهاتف
         if not provider_phone.startswith("whatsapp:"):
@@ -358,7 +330,7 @@ async def search_and_notify_providers(
                 request_id=request_id,
                 provider_id=provider_id
             )
-            print(f"📤 [ProviderAgent] Sent to: {provider_name} | Link: {offer_url[:50]}...")
+            print(f"📤 [ProviderAgent] Sent to: {provider_name} | Link: {offer_url}")
     
     # 🧪 إرسال نسخة للمزود التجريبي (ابوعمر تيست)
     TEST_PROVIDER_PHONE = "966596268690"  # رقم المزود التجريبي
