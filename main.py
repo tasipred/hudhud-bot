@@ -1,12 +1,16 @@
 """
 Hudhudbot - Main Application
 التطبيق الرئيسي - Webhook + توجيه الرسائل + إرسال للمزودين
+Version: 2.2.1 - Full Bot
 """
 
-# Debug: Print before any imports
-print("="*50)
-print("🚀 Hudhud Bot Starting...")
-print("="*50)
+# Force flush output
+import sys
+sys.stdout.reconfigure(line_buffering=True)
+
+print("=" * 50, flush=True)
+print("🚀 Hudhud Bot v2.2.1 Starting...", flush=True)
+print("=" * 50, flush=True)
 
 import os
 import asyncio
