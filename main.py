@@ -364,17 +364,10 @@ async def search_and_notify_providers(
     TEST_PROVIDER_PHONE = "966596268690"  # رقم المزود التجريبي
     TEST_PROVIDER_NAME = "ابوعمر تيست"
     
-    # إنشاء رابط للمزود التجريبي
-    test_offer_links = await supabase_service.create_provider_offer_links(
-        request_id=request_id,
-        provider_ids=["test-provider-00000000-0000-0000-0000-000000000001"],
-        expiry_hours=2
-    )
+    # استخدام رابط العروض العام مباشرة (بدون إنشاء رابط في قاعدة البيانات)
+    test_offer_url = f"{APP_URL}/offers/{request_id}"
     
-    if test_offer_links:
-        test_offer_url = test_offer_links[0].get("link_url") if test_offer_links else f"{APP_URL}/offers/{request_id}"
-        
-        test_message = f"""
+    test_message = f"""
 🧪 *[تجربة] طلب جديد من هدهد!*
 
 📋 *الخدمة:* {service_type}
@@ -391,17 +384,17 @@ async def search_and_notify_providers(
 📞 *رقم العميل:* {customer_phone}
 
 ⚠️ هذه نسخة تجريبية - جميع الطلبات ترسل إليك تلقائياً
-        """.strip()
-        
-        test_phone = f"whatsapp:+{TEST_PROVIDER_PHONE}"
-        
-        test_result = twilio_service.send_whatsapp(
-            to_number=test_phone,
-            body=test_message
-        )
-        
-        if test_result.get("status") in ["sent", "mocked"]:
-            print(f"🧪 [ProviderAgent] Sent to TEST provider: {TEST_PROVIDER_NAME} | {TEST_PROVIDER_PHONE}")
+    """.strip()
+    
+    test_phone = f"whatsapp:+{TEST_PROVIDER_PHONE}"
+    
+    test_result = twilio_service.send_whatsapp(
+        to_number=test_phone,
+        body=test_message
+    )
+    
+    if test_result.get("status") in ["sent", "mocked"]:
+        print(f"🧪 [ProviderAgent] Sent to TEST provider: {TEST_PROVIDER_NAME} | {TEST_PROVIDER_PHONE}")
     
     return {
         "success": contacted_count > 0,
