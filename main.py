@@ -1195,5 +1195,6 @@ async def debug_supabase():
 # ============================================
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 8000))
-    print(f"🚀 Starting {APP_NAME} v2.0.0 on port {port}")
+    print(f"🚀 Starting {APP_NAME} v2.2.1 on port {port}", flush=True)
+    print(f"🌐 Server: http://0.0.0.0:{port}", flush=True)
     uvicorn.run(app, host="0.0.0.0", port=port)
