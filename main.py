@@ -90,6 +90,8 @@ def extract_info_locally(messages: List[Dict]) -> Dict:
         if m.get('sender') == 'customer' or m.get('direction') == 'inbound'
     ])
     
+    print(f"📝 [LocalExtract] Customer messages: {customer_messages[:200]}...", flush=True)
+    
     result = {
         "service_type": None,
         "city": None,
@@ -133,6 +135,8 @@ def extract_info_locally(messages: List[Dict]) -> Dict:
     if result["service_type"] and result["city"]:
         result["is_complete"] = True
         result["details"] = customer_messages
+    
+    print(f"📝 [LocalExtract] Result: service={result['service_type']}, city={result['city']}, complete={result['is_complete']}", flush=True)
     
     return result
 
@@ -634,8 +638,11 @@ async def handle_customer_message(
             # التحقق إذا جمعنا كل المعلومات
             request_info = await extract_request_info(messages + [{"sender": "customer", "content": message_body}])
             
+            print(f"📋 [ExtractInfo] Result: {request_info}", flush=True)
+            
             if request_info.get("is_complete") and request_info.get("service_type") and request_info.get("city"):
                 # تحديث السياق
+                print(f"✅ [Context] Updating context with: service={request_info.get('service_type')}, city={request_info.get('city')}", flush=True)
                 await supabase_service.update_conversation(
                     conversation_id=conversation_id,
                     status=ConversationState.CONFIRMING,
@@ -662,6 +669,7 @@ async def handle_customer_message(
     
     elif status == ConversationState.CONFIRMING:
         # العميل يؤكد المعلومات
+        print(f"🔵 [Confirming] Context: {context}", flush=True)
         if any(word in message_body.lower() for word in ["نعم", "صح", "صحيح", "أيوة", "تمام", "أكد", "ابدأ", "ابحث"]):
             # العميل أكد - ننتقل للبحث
             
