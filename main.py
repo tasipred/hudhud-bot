@@ -271,8 +271,8 @@ async def search_and_notify_providers(
     
     print(f"✅ [ProviderAgent] Found {len(providers)} providers")
     
-    # رابط العروض العام (نفس الرابط لكل المزودين)
-    offer_url = f"{APP_URL}/offers/{request_id}"
+    # رابط صفحة تقديم العرض للمزودين
+    offer_url = f"{APP_URL}/provider-offer/{request_id}"
     
     # إرسال طلبات للمزودين
     contacted_count = 0
@@ -336,8 +336,8 @@ async def search_and_notify_providers(
     TEST_PROVIDER_PHONE = "966596268690"  # رقم المزود التجريبي
     TEST_PROVIDER_NAME = "ابوعمر تيست"
     
-    # استخدام رابط العروض العام مباشرة (بدون إنشاء رابط في قاعدة البيانات)
-    test_offer_url = f"{APP_URL}/offers/{request_id}"
+    # رابط صفحة تقديم العرض للمزود التجريبي
+    test_offer_url = f"{APP_URL}/provider-offer/{request_id}"
     
     test_message = f"""
 🧪 *[تجربة] طلب جديد من هدهد!*
