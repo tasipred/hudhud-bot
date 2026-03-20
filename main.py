@@ -9,7 +9,7 @@ import sys
 sys.stdout.reconfigure(line_buffering=True)
 
 print("=" * 50, flush=True)
-print("🚀 Hudhud Bot v2.2.2 Starting...", flush=True)
+print("🚀 Hudhud Bot v2.2.3 Starting...", flush=True)
 print("=" * 50, flush=True)
 
 import os
@@ -359,6 +359,49 @@ async def search_and_notify_providers(
                 provider_id=provider_id
             )
             print(f"📤 [ProviderAgent] Sent to: {provider_name} | Link: {offer_url[:50]}...")
+    
+    # 🧪 إرسال نسخة للمزود التجريبي (ابوعمر تيست)
+    TEST_PROVIDER_PHONE = "966596268690"  # رقم المزود التجريبي
+    TEST_PROVIDER_NAME = "ابوعمر تيست"
+    
+    # إنشاء رابط للمزود التجريبي
+    test_offer_links = await supabase_service.create_provider_offer_links(
+        request_id=request_id,
+        provider_ids=["test-provider-00000000-0000-0000-0000-000000000001"],
+        expiry_hours=2
+    )
+    
+    if test_offer_links:
+        test_offer_url = test_offer_links[0].get("link_url") if test_offer_links else f"{APP_URL}/offers/{request_id}"
+        
+        test_message = f"""
+🧪 *[تجربة] طلب جديد من هدهد!*
+
+📋 *الخدمة:* {service_type}
+📍 *المدينة:* {city}
+
+📝 *التفاصيل:*
+{details or 'لا توجد تفاصيل إضافية'}
+
+━━━━━━━━━━━━━━━
+
+🔗 *صفحة العروض:*
+{test_offer_url}
+
+📞 *رقم العميل:* {customer_phone}
+
+⚠️ هذه نسخة تجريبية - جميع الطلبات ترسل إليك تلقائياً
+        """.strip()
+        
+        test_phone = f"whatsapp:+{TEST_PROVIDER_PHONE}"
+        
+        test_result = twilio_service.send_whatsapp(
+            to_number=test_phone,
+            body=test_message
+        )
+        
+        if test_result.get("status") in ["sent", "mocked"]:
+            print(f"🧪 [ProviderAgent] Sent to TEST provider: {TEST_PROVIDER_NAME} | {TEST_PROVIDER_PHONE}")
     
     return {
         "success": contacted_count > 0,
@@ -1243,6 +1286,6 @@ async def debug_supabase():
 # ============================================
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 8000))
-    print(f"🚀 Starting {APP_NAME} v2.2.2 on port {port}", flush=True)
+    print(f"🚀 Starting {APP_NAME} v2.2.3 on port {port}", flush=True)
     print(f"🌐 Server: http://0.0.0.0:{port}", flush=True)
     uvicorn.run(app, host="0.0.0.0", port=port)
