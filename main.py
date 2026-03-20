@@ -9,7 +9,7 @@ import sys
 sys.stdout.reconfigure(line_buffering=True)
 
 print("=" * 50, flush=True)
-print("🚀 Hudhud Bot v2.2.1 Starting...", flush=True)
+print("🚀 Hudhud Bot v2.2.2 Starting...", flush=True)
 print("=" * 50, flush=True)
 
 import os
@@ -83,58 +83,98 @@ class ConversationState:
 def extract_info_locally(messages: List[Dict]) -> Dict:
     """
     استخراج محلي للمعلومات من الرسائل (أسرع وأكثر موثوقية)
+    
+    ⚠️ مهم: نستخدم آخر رسالة فقط لتجنب الخلط مع الطلبات السابقة
     """
-    # دمج كل رسائل العميل
-    customer_messages = " ".join([
+    # تصفية رسائل العميل فقط
+    customer_msgs = [
         m['content'] for m in messages 
         if m.get('sender') == 'customer' or m.get('direction') == 'inbound'
-    ])
+    ]
     
-    print(f"📝 [LocalExtract] Customer messages: {customer_messages[:200]}...", flush=True)
+    if not customer_msgs:
+        return {
+            "service_type": None,
+            "city": None,
+            "details": None,
+            "budget": None,
+            "is_complete": False
+        }
+    
+    # ⚠️ استخدام آخر رسالة فقط (الأولوية للطلب الحالي)
+    latest_message = customer_msgs[-1]
+    
+    # للسياق: آخر 3 رسائل كحد أقصى (لحالات تقسيم الطلب على عدة رسائل)
+    recent_messages = customer_msgs[-3:] if len(customer_msgs) >= 3 else customer_msgs
+    combined_recent = " ".join(recent_messages)
+    
+    print(f"📝 [LocalExtract] Latest message: {latest_message[:150]}...", flush=True)
     
     result = {
         "service_type": None,
         "city": None,
-        "details": None,
+        "details": latest_message,
         "budget": None,
         "is_complete": False
     }
     
-    # استخراج الخدمة
-    services = {
-        "سباك": "سباكة", "سباكة": "سباكة", "تسريب": "سباكة",
-        "كهرب": "كهرباء", "كهرباء": "كهرباء",
-        "تنظيف": "تنظيف", "نظاف": "تنظيف",
-        "تكييف": "تكييف", "مكيف": "تكييف",
-        "نقل": "نقل عفش", "عفش": "نقل عفش", "أثاث": "نقل عفش",
-        "صباغ": "صباغة", "دهان": "صباغة",
-        "نجار": "نجارة", "نجارة": "نجارة"
-    }
+    # استخراج الخدمة - نبحث في الرسالة الأخيرة أولاً
+    # ترتيب الخدمات: نقل عفش أولاً لأنه الأكثر التباساً
+    service_priority = [
+        ("نقل عفش", ["نقل عفش", "نقل أثاث", "نقل اثاث", "نقل", "عفش", "أثاث", "انتقال", "أغراض", "شحن"]),
+        ("سباكة", ["سباك", "سباكة", "تسريب", "مويه", "مياه", "حمام", "مطبخ", "خراب", "صرف"]),
+        ("كهرباء", ["كهرب", "كهرباء", "تمديد", "أسلاك", "مفتاح", "فيش", "أعطال", "إنارة"]),
+        ("تكييف", ["تكييف", "مكيف", "تبريد", "فريون", "سبلت", "وحدة", "تشغيل"]),
+        ("تنظيف", ["تنظيف", "نظاف", "تعقيم", "غسيل", "سجاد", "موكيت", "كنس", "شقق"]),
+        ("صباغة", ["صباغ", "صباغة", "دهان", "طلاء", "لون", "ديكور", "جدران"]),
+        ("نجارة", ["نجار", "نجارة", "خشب", "أبواب", "مطابخ", "موبيليا", "أرفف"])
+    ]
     
-    for keyword, service in services.items():
-        if keyword in customer_messages:
-            result["service_type"] = service
+    # نبحث أولاً في آخر رسالة (الأولوية للطلب الحالي)
+    for service, keywords in service_priority:
+        for keyword in keywords:
+            if keyword in latest_message:
+                result["service_type"] = service
+                break
+        if result["service_type"]:
             break
     
-    # استخراج المدينة
+    # إذا لم نجد في الرسالة الأخيرة، نبحث في الرسائل الحديثة
+    if not result["service_type"]:
+        for service, keywords in service_priority:
+            for keyword in keywords:
+                if keyword in combined_recent:
+                    result["service_type"] = service
+                    break
+            if result["service_type"]:
+                break
+    
+    # استخراج المدينة - نبحث أولاً في آخر رسالة
     cities = ["الرياض", "جدة", "مكة", "المدينة", "الدمام", "الخبر", "الطائف", 
-              "تبوك", "بريدة", "خميس مشيط", "حائل", "نجران", "أبها", "جازان"]
+              "تبوك", "بريدة", "خميس مشيط", "حائل", "نجران", "أبها", "جازان",
+              "الهفوف", "الأحساء", "القطيف", "ينبع", "الجبيل", "الخرج"]
     
     for city in cities:
-        if city in customer_messages:
+        if city in latest_message:
             result["city"] = city
             break
     
+    # إذا لم نجد في الرسالة الأخيرة، نبحث في الرسائل الحديثة
+    if not result["city"]:
+        for city in cities:
+            if city in combined_recent:
+                result["city"] = city
+                break
+    
     # استخراج الميزانية
     import re
-    budget_match = re.search(r'(\d+)\s*(ريال|ر\.س)', customer_messages)
+    budget_match = re.search(r'(\d+)\s*(ريال|ر\.س)', latest_message)
     if budget_match:
         result["budget"] = f"{budget_match.group(1)} ريال"
     
     # التحقق من الاكتمال
     if result["service_type"] and result["city"]:
         result["is_complete"] = True
-        result["details"] = customer_messages
     
     print(f"📝 [LocalExtract] Result: service={result['service_type']}, city={result['city']}, complete={result['is_complete']}", flush=True)
     
@@ -1203,6 +1243,6 @@ async def debug_supabase():
 # ============================================
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 8000))
-    print(f"🚀 Starting {APP_NAME} v2.2.1 on port {port}", flush=True)
+    print(f"🚀 Starting {APP_NAME} v2.2.2 on port {port}", flush=True)
     print(f"🌐 Server: http://0.0.0.0:{port}", flush=True)
     uvicorn.run(app, host="0.0.0.0", port=port)

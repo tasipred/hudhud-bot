@@ -21,6 +21,9 @@ CONFIRM_WORDS = ["نعم", "صح", "صحيح", "تمام", "اكيد", "ابحث
 # كلمات الإلغاء
 CANCEL_WORDS = ["لا", "إلغاء", "الغاء", "تراجع", "كانسل", "الغي"]
 
+# كلمات إعادة التعيين (طلب جديد)
+RESET_WORDS = ["طلب جديد", "جديد", "ابي", "أبي", "ابغى", "أبغى", "أريد", "اريد", "احتاج", "أحتاج", "اريده", "ممكن", "أبي"]
+
 # المدن
 KNOWN_CITIES = [
     "الرياض", "جدة", "مكة", "المدينة", "الدمام", "الخبر", "الطائف", 
@@ -159,6 +162,18 @@ class ReceptionAgent:
         context = CONTEXT_STORE.get(phone_key, {"extracted_data": {}, "stage": "collecting"})
         extracted_data = context.get("extracted_data", {})
         print(f"📋 [SmartAgent] Current data: {extracted_data}")
+        
+        # 🔄 التحقق من طلب جديد - إعادة تعيين السياق
+        is_new_request = any(w in message for w in RESET_WORDS)
+        new_service = self._detect_service(message)
+        new_city = self._detect_city(message)
+        
+        if is_new_request and (new_service or new_city):
+            print("🔄 [SmartAgent] New request detected - resetting context")
+            extracted_data = {}
+            if phone_key in CONTEXT_STORE:
+                del CONTEXT_STORE[phone_key]
+            print("✅ [SmartAgent] Context cleared for new request")
         
         # التحقق من الإلغاء
         if self._is_canceled(message):
