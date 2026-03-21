@@ -9,7 +9,7 @@ import sys
 sys.stdout.reconfigure(line_buffering=True)
 
 print("=" * 50, flush=True)
-print("🚀 Hudhud Bot v2.2.4 Starting...", flush=True)
+print("🚀 Hudhud Bot v2.2.5 Starting...", flush=True)
 print("=" * 50, flush=True)
 
 import os
