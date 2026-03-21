@@ -371,8 +371,7 @@ async def search_and_notify_providers(
     return {
         "success": contacted_count > 0,
         "providers_found": len(providers),
-        "providers_contacted": contacted_count,
-        "offer_links_created": len(offer_links)
+        "providers_contacted": contacted_count
     }
 
 
