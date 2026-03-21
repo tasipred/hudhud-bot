@@ -65,8 +65,9 @@ class TwilioService:
                 "body": body,
                 "to": to_number
             }
-            if media_url:
-                msg_args["media_url"] = [media_url]
+            # TODO: تعطيل media_url - يسبب أخطاء 11200 وتكاليف SMS إضافية
+            # if media_url:
+            #     msg_args["media_url"] = [media_url]
 
             message = self.client.messages.create(**msg_args)
             print(f"[TwilioService] ✅ Sent OK: {message.sid}")
@@ -327,8 +328,9 @@ _جاهز لخدمتك! فقط اكتب طلبك_ 👇
         
         return self.send_whatsapp(
             to_number=customer_phone,
-            body=card_body,
-            media_url=vendor_data.get('portfolio_image')
+            body=card_body
+            # media_url معطل - يسبب تكاليف SMS إضافية
+            # media_url=vendor_data.get('portfolio_image')
         )
 
 
